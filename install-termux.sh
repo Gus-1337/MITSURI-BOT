@@ -78,15 +78,19 @@ else
 fi
 
 say "✅ Instalación terminada"
-printf '  Inicia el bot con:\n'
-printf '    cd %s && npm start\n\n' "$DIR"
-printf '  Elige 1 (QR) o 2 (código de 8 dígitos). En el mismo celular conviene la opción 2.\n'
 printf '  Para que no se caiga: termux-wake-lock, desactiva la optimización de batería y usa tmux.\n'
 printf '  Opcional (stickers de video): pkg install -y ffmpeg\n\n'
+printf '  Al iniciar, el bot preguntará 1 (QR) o 2 (código de 8 dígitos).\n'
+printf '  En el mismo celular conviene la opción 2. Si escribes 1 o 2 aquí, vas directo a ese método.\n\n'
 
 if [ -t 0 ]; then
-  read -r -p "¿Iniciar el bot ahora? [s/N] " RESPUESTA || true
-  case "${RESPUESTA:-n}" in
-    s|S|si|y|yes) say "Iniciando MITSURI-MD…"; exec npm start ;;
+  read -r -p "¿Iniciar el bot ahora? [S/n] " RESPUESTA || true
+  case "${RESPUESTA:-s}" in
+    n|N|no|NO) printf '\n  Cuando quieras: cd %s && npm start\n\n' "$DIR" ;;
+    1) say "Iniciando MITSURI-MD… (QR)"; export AUTH_METHOD=qr; exec npm start ;;
+    2) say "Iniciando MITSURI-MD… (código de 8 dígitos)"; export AUTH_METHOD=code; exec npm start ;;
+    *) say "Iniciando MITSURI-MD…"; exec npm start ;;
   esac
+else
+  printf '  Inicia con: cd %s && npm start\n\n' "$DIR"
 fi

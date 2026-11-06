@@ -61,7 +61,7 @@ cd ~/MITSURI-BOT
 npm start
 ```
 
-Elige la **opción 2 (código de 8 dígitos)** si vinculas desde el mismo celular: escanear un QR con el mismo dispositivo es incómodo. El menú te pide el número.
+Ojo, son **dos preguntas distintas**: el instalador pregunta *«¿Iniciar el bot ahora? [S/n]»* (Enter o `s` = sí, `n` = no, `1` = iniciar con QR, `2` = iniciar con código); si contestas `s`, el `1`/`2` de QR o código lo pregunta **el bot** después de arrancar. Elige la **opción 2 (código de 8 dígitos)** si vinculas desde el mismo celular: escanear un QR con el mismo dispositivo es incómodo. El menú te pide el número.
 
 **Que no se caiga**
 
@@ -79,8 +79,10 @@ Desactiva la optimización de batería de Termux en Ajustes de Android y deja su
 | `node -v` menor a 20 | `pkg install -y nodejs-lts` |
 | `npm install` falla al traer Baileys | Falta `git`: `pkg install -y git` |
 | `405` al conectar | Bloqueo de red al WebSocket de WhatsApp (VPN, firewall de datos móviles, sandbox). Prueba otra red. |
+| Avisos `npm warn allow-scripts` de npm 11.16+/12 | Son la nueva política de scripts: **no rompen nada** (`tsx` trae el binario de esbuild como dependencia opcional y `sharp` usa WASM). El repo ya lleva `allowScripts` en `package.json`; si los ves en una copia vieja, `git pull && npm install`. |
 | Aviso de `fluent-ffmpeg` | Opcional, solo vistas previas de video: `pkg install -y ffmpeg` |
 | Se desconecta al apagar la pantalla | `termux-wake-lock` + desactivar optimización de batería |
+| Escribí `2` en «¿Iniciar el bot ahora?» y volví al prompt | No se rompió nada: esa respuesta solo cerró el instalador. Corre `npm start` y ahí sí escribe `2`. |
 
 ---
 
