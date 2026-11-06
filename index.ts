@@ -5,13 +5,16 @@
  * ║  Toda la personalización está en config.ts                  ║
  * ╚═══════════════════════════════════════════════════════════╝
  */
+import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
+import readline from 'node:readline';
+import chalk from 'chalk';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
 import makeWASocket, { useMultiFileAuthState, DisconnectReason, Browsers } from '@whiskeysockets/baileys';
 
-import { bot, apis } from './config.js';
+import { config, bot, apis } from './config.js';
 import { handleMessage, handleGroupParticipants, invalidateGroupCache } from './handler.js';
 import { loadCommands, commandCount } from './lib/loader.js';
 import { applySettings } from './lib/settings.js';
@@ -21,6 +24,10 @@ import { sleep } from './lib/utils.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
 const sessionDir = path.resolve(process.cwd(), bot.sessionDir);
+
+let reconnectTimer: NodeJS.Timeout | null = null;
+let codeRequested = false;
+let numeroVinculacion = '';
 
 function banner(): void {
   const line = '─'.repeat(52);
@@ -33,11 +40,94 @@ function banner(): void {
   console.log(`   🧩 Comandos   : ${commandCount()}`);
   console.log(`   🔌 APIs       : ${Object.values(apis).filter(a => a.enabled).map(a => a.label).join(' · ')}`);
   console.log(`   🔐 Sesión     : ${sessionDir}`);
-  console.log(`   📲 Vinculación: ${bot.auth === 'code' ? 'Código de emparejamiento' : 'QR en terminal'}\n`);
+  console.log(`   📲 Vinculación: ${bot.auth === 'code' ? `Código de 8 dígitos (+${numeroVinculacion || bot.owner.number})` : 'QR en terminal'}\n`);
 }
 
-let reconnectTimer: NodeJS.Timeout | null = null;
-let codeRequested = false;
+function askQuestion(pregunta: string): Promise<string> {
+  return new Promise<string>(resolve => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    let cerrado = false;
+    let timer: NodeJS.Timeout | undefined;
+    const responder = (valor: string): void => {
+      if (cerrado) return;
+      cerrado = true;
+      if (timer) clearTimeout(timer);
+      rl.close();
+      resolve(valor.trim());
+    };
+    rl.question(pregunta, respuesta => responder(respuesta ?? ''));
+    rl.on('close', () => responder(''));
+    timer = setTimeout(() => responder(''), 60_000);
+    timer.unref();
+  });
+}
+
+async function elegirVinculacion(): Promise<void> {
+  const metodo = (process.env.AUTH_METHOD || '').trim().toLowerCase();
+  const argv = process.argv.slice(2);
+  const methodCodeQR = metodo === 'qr' || metodo === '1' || argv.includes('--qr');
+  const methodCode = metodo === 'code' || metodo === 'pairing' || metodo === '2' || argv.includes('--code') || argv.includes('--pairing');
+
+  let opcion = '';
+  let usarCodigo = false;
+
+  if (methodCodeQR) {
+    opcion = '1';
+    console.log(chalk.gray('   AUTH_METHOD=qr → Código QR, sin preguntar.'));
+  } else if (methodCode) {
+    opcion = '2';
+    usarCodigo = true;
+    console.log(chalk.gray('   AUTH_METHOD=code → Código de 8 dígitos, sin preguntar.'));
+  } else if (!process.stdin.isTTY) {
+    opcion = '1';
+    console.log(chalk.gray('   Sin terminal interactiva → QR. Usa AUTH_METHOD=qr|code o --qr/--code para elegir.'));
+  } else {
+    const lineM = '⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ 》';
+    console.log(chalk.white(`╭${lineM}`));
+    opcion = await askQuestion(
+      `┊ ${chalk.bold.cyan(' METODO DE VINCULACION ')}\n` +
+      `┊ ${chalk.bold.white('⇢ Opcion 1:')} ${chalk.cyan('Codigo QR.')}\n` +
+      `┊ ${chalk.bold.white('⇢ Opcion 2:')} ${chalk.cyan('Codigo de 8 digitos.')}\n` +
+      `╰${lineM}\n${chalk.bold.white('---> ')}`
+    );
+    usarCodigo = opcion === '2';
+  }
+
+  if (opcion !== '1' && opcion !== '2') {
+    console.log(chalk.yellow('   Opción no válida → se usa el Código QR.'));
+    opcion = '1';
+    usarCodigo = false;
+  }
+
+  process.env.AUTH_METHOD = usarCodigo ? 'code' : 'qr';
+  config.auth = usarCodigo ? 'code' : 'qr';
+  bot.auth = config.auth;
+  console.log(chalk.green(`   ✔ ${usarCodigo ? 'Opción 2 · Código de 8 dígitos' : 'Opción 1 · Código QR'}\n`));
+
+  if (!usarCodigo) return;
+
+  const porDefecto = (process.env.PAIRING_NUMBER || bot.owner.number || '').replace(/[^0-9]/g, '');
+  let numero = porDefecto;
+  if (process.stdin.isTTY) {
+    const respuesta = await askQuestion(chalk.bold.white(`   ┊ Número a vincular, sin + (Enter = ${porDefecto}): `));
+    if (respuesta) numero = respuesta.replace(/[^0-9]/g, '');
+  }
+  if (!numero) {
+    console.error('❌ Para el código de 8 dígitos define OWNER_NUMBER o PAIRING_NUMBER en .env, o un número en config.ts.');
+    process.env.AUTH_METHOD = 'qr';
+    config.auth = 'qr';
+    bot.auth = 'qr';
+    return;
+  }
+
+  numeroVinculacion = numero;
+  config.owner.add(numero);
+  bot.owner.numbers.add(numero);
+  const jid = `${numero}@s.whatsapp.net`;
+  if (!bot.owner.extraJids.includes(jid)) bot.owner.extraJids.push(jid);
+  process.env.OWNER_NUMBER = numero;
+  console.log(chalk.cyan(`   📞 Se vinculará +${numero}\n`));
+}
 
 async function start(): Promise<void> {
   fs.mkdirSync(sessionDir, { recursive: true });
@@ -66,14 +156,15 @@ async function start(): Promise<void> {
 
     if (bot.auth === 'code' && connection === 'connecting' && !codeRequested && !state.creds.registered) {
       codeRequested = true;
-      if (!bot.owner.number) {
-        console.error('❌ AUTH_METHOD=code necesita OWNER_NUMBER en el archivo .env (número con código de país, sin +).');
+      const numero = numeroVinculacion || bot.owner.number;
+      if (!numero) {
+        console.error('❌ AUTH_METHOD=code necesita OWNER_NUMBER o PAIRING_NUMBER en .env (número con código de país, sin +).');
       } else {
         try {
           const code = bot.pairingCode
-            ? await sock.requestPairingCode(bot.owner.number, bot.pairingCode)
-            : await sock.requestPairingCode(bot.owner.number);
-          console.log(`\n🔐 CÓDIGO DE VINCULACIÓN: ${code}\n   WhatsApp → Dispositivos vinculados → Vincular con número de teléfono\n`);
+            ? await sock.requestPairingCode(numero, bot.pairingCode)
+            : await sock.requestPairingCode(numero);
+          console.log(`\n🔐 CÓDIGO DE VINCULACIÓN: ${code}\n   Número: +${numero} · WhatsApp → Dispositivos vinculados → Vincular con número de teléfono\n`);
         } catch (error: any) {
           console.error('❌ No se pudo pedir el código de vinculación:', error?.message ?? error);
         }
@@ -128,8 +219,9 @@ async function start(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  await elegirVinculacion();
   const loaded = await loadCommands();
-  banner(); // después de cargar, para que muestre el número real de comandos
+  banner();
   if (!loaded) {
     console.warn('⚠️ No se cargó ningún comando. Revisa la carpeta commands/.');
   }

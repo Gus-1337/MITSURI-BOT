@@ -35,7 +35,35 @@ npm install
 npm start
 ```
 
-Node.js ≥ 20. QR en la terminal; `AUTH_METHOD=code` para código de vinculación. Si la conexión devuelve `405`, es bloqueo de red al WebSocket de WhatsApp (sandbox/proxy), no del bot.
+Node.js ≥ 20. Si la conexión devuelve `405`, es bloqueo de red al WebSocket de WhatsApp (sandbox/proxy), no del bot.
+
+---
+
+## Vinculación
+
+Al arrancar, `index.ts` pregunta cómo quieres vincular:
+
+```
+╭⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ 》
+┊  METODO DE VINCULACION
+┊ ⇢ Opcion 1: Codigo QR.
+┊ ⇢ Opcion 2: Codigo de 8 digitos.
+╰⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ 》
+--->
+```
+
+Escribe `1` o `2`. Con la opción 2 te pide el número a vincular (Enter = dueño) y muestra el código de 8 dígitos para *WhatsApp → Dispositivos vinculados → Vincular con número de teléfono*. El número elegido se agrega a los dueños de la sesión.
+
+Para saltar la pregunta:
+
+```bash
+AUTH_METHOD=qr npm start
+AUTH_METHOD=code PAIRING_NUMBER=51926519334 npm start
+npm start -- --qr
+npm start -- --code
+```
+
+`PAIRING_CODE` fija un código propio de 8 caracteres. En servidores sin terminal interactiva (PM2, Docker, CI) no se pregunta: usa QR salvo que definas `AUTH_METHOD`. Las variables se leen de `.env` (`dotenv/config` en `index.ts`) o del entorno.
 
 ---
 
@@ -134,7 +162,7 @@ Multi-Device real (sesión en `session/`, QR o pairing code, reconexión), sub-b
 
 ## Seguridad
 
-- **Revoca/rota el token de GitHub compartido en el chat.** No se usó para clonar, no está en el repo y no se hizo push.
+- **Revoca/rota el token de GitHub compartido en el chat.** Se usó solo como header temporal para el push, no quedó guardado en `.git/config` ni en ningún archivo; al haber estado en texto plano, dálo por comprometido.
 - `session/`, `sessions/`, `.env`, `database/` están en `.gitignore`.
 - Las keys de `config.ts` son públicas en un repo público: muévelas a `.env` (`STELLAR_API_KEY`, `EVOGB_KEY`, `YOSOYYO_KEY`).
 - Baileys viene de `git+https://github.com/Andresv27728/baileys-beta.git`.
