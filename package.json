@@ -12,7 +12,8 @@
     "dev": "tsx watch index.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit false --outDir dist",
-    "start:build": "node dist/index.js"
+    "start:build": "node dist/index.js",
+    "install:termux": "bash install-termux.sh"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "git+https://github.com/Andresv27728/baileys-beta.git",
@@ -21,7 +22,7 @@
     "dotenv": "^16.4.7",
     "pino": "^9.6.0",
     "qrcode-terminal": "^0.12.0",
-    "sharp": "^0.33.5"
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@types/node": "^20.17.10",

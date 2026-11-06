@@ -24,9 +24,10 @@ MITSURI-BOT/
 │   ├── config-engine.ts # deriva bot/apis/categories/menu/limits/theme
 │   ├── config-types.ts  # tipos internos
 │   ├── db.ts  group.ts  loader.ts  menu.ts  respond.ts
-│   ├── runtime.ts  settings.ts  subbot.ts  types.ts  utils.ts
+│   ├── runtime.ts  settings.ts  sharp.ts  subbot.ts  types.ts  utils.ts
 ├── config.ts            # globals + config + banners + links + endpoints + categorías
 ├── handler.ts  index.ts
+├── install-termux.sh    # instalador de un toque para Android
 └── package.json  tsconfig.json  .env.example  .gitignore
 ```
 
@@ -36,6 +37,50 @@ npm start
 ```
 
 Node.js ≥ 20. Si la conexión devuelve `405`, es bloqueo de red al WebSocket de WhatsApp (sandbox/proxy), no del bot.
+
+---
+
+## 📱 Instalación en Termux (Android)
+
+Usa Termux de **F-Droid o GitHub**, no el de Play Store (está descontinuado y rompe con Node ≥ 20). Necesitas Android 7+, ~1 GB libre e internet estable.
+
+**Un solo comando**, pégalo en Termux:
+
+```bash
+pkg update -y && pkg upgrade -y && pkg install -y nodejs-lts git && git clone https://github.com/Gus-1337/MITSURI-BOT.git && cd MITSURI-BOT && bash install-termux.sh
+```
+
+Si ya clonaste el repo: `bash install-termux.sh` o `npm run install:termux`.
+
+`install-termux.sh` instala `nodejs-lts` + `git`, activa `termux-wake-lock`, comprueba Node ≥ 20, crea `.env` desde `.env.example`, corre `npm install` y **arregla `sharp`**: en Android no hay binario nativo, así que instala `@img/sharp-wasm32` (la variante WebAssembly que el propio sharp recomienda). No hay que compilar nada: `tsx`/`esbuild` y `whatsapp-rust-bridge` ya traen binario/WASM para `android-arm64`.
+
+Después:
+
+```bash
+cd ~/MITSURI-BOT
+npm start
+```
+
+Elige la **opción 2 (código de 8 dígitos)** si vinculas desde el mismo celular: escanear un QR con el mismo dispositivo es incómodo. El menú te pide el número.
+
+**Que no se caiga**
+
+```bash
+termux-wake-lock
+pkg install -y tmux
+tmux new -s mitsuri 'npm start'
+```
+
+Desactiva la optimización de batería de Termux en Ajustes de Android y deja su notificación activa. Si cierras la sesión: `tmux attach -t mitsuri`.
+
+| Síntoma | Arreglo |
+|---|---|
+| `Could not load the "sharp" module using the android-arm64 runtime` | `npm install --force --no-save @img/sharp-wasm32` o vuelve a correr `bash install-termux.sh`. El bot arranca igual; solo `.sticker` y `.toimg` avisan. |
+| `node -v` menor a 20 | `pkg install -y nodejs-lts` |
+| `npm install` falla al traer Baileys | Falta `git`: `pkg install -y git` |
+| `405` al conectar | Bloqueo de red al WebSocket de WhatsApp (VPN, firewall de datos móviles, sandbox). Prueba otra red. |
+| Aviso de `fluent-ffmpeg` | Opcional, solo vistas previas de video: `pkg install -y ffmpeg` |
+| Se desconecta al apagar la pantalla | `termux-wake-lock` + desactivar optimización de batería |
 
 ---
 
@@ -171,6 +216,6 @@ Multi-Device real (sesión en `session/`, QR o pairing code, reconexión), sub-b
 
 ## Verificado
 
-`npm run typecheck` · `npm run build` · arranque con 84 comandos y 9 APIs · 43 endpoints · 19 categorías · botones/listas · hot-reload · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
+`npm run typecheck` · `npm run build` · arranque con 84 comandos y 9 APIs · 43 endpoints · 19 categorías · botones/listas · hot-reload · menú de vinculación QR/código · `install-termux.sh` · `sharp` probado con solo WASM (y el bot arrancando igual sin `sharp`) · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
 
 MIT 🌸
