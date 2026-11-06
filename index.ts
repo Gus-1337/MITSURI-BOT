@@ -2,17 +2,24 @@
  * ╔═══════════════════════════════════════════════════════════╗
  * ║  🌸 MITSURI-MD · Punto de entrada                           ║
  * ║  WhatsApp Multi-Device (Baileys beta) · QR o Pairing Code   ║
- * ║  Toda la personalización está en config.ts                  ║
+ * ║  Conexión basada en el flujo que sí entrega el código        ║
  * ╚═══════════════════════════════════════════════════════════╝
  */
 import 'dotenv/config';
 import fs from 'node:fs';
+import https from 'node:https';
 import path from 'node:path';
 import readline from 'node:readline';
 import chalk from 'chalk';
-import pino from 'pino';
+import P from 'pino';
 import qrcode from 'qrcode-terminal';
-import makeWASocket, { useMultiFileAuthState, DisconnectReason, Browsers } from '@whiskeysockets/baileys';
+import makeWASocket, {
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+  Browsers,
+} from '@whiskeysockets/baileys';
 
 import { config, bot, apis } from './config.js';
 import { handleMessage, handleGroupParticipants, invalidateGroupCache } from './handler.js';
@@ -23,14 +30,20 @@ import { setMainSocket } from './lib/runtime.js';
 import { restoreSubs, setSubMessageHandler } from './lib/subbot.js';
 import { sleep } from './lib/utils.js';
 
-const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
+const logger = P({ level: process.env.LOG_LEVEL || 'silent' });
 const sessionDir = path.resolve(process.cwd(), bot.sessionDir);
 const CODE_TTL_MS = Math.max(5_000, Number(process.env.PAIRING_TTL_MS) || 120_000);
-const PAIRING_FALLBACK_MS = Math.max(500, Number(process.env.PAIRING_FALLBACK_MS) || 10_000);
 const TTL_TEXTO = CODE_TTL_MS >= 60_000
   ? `${Math.round(CODE_TTL_MS / 60_000)} minuto${Math.round(CODE_TTL_MS / 60_000) === 1 ? '' : 's'}`
   : `${Math.round(CODE_TTL_MS / 1000)} segundos`;
+const PAIRING_DELAY_MS = Math.max(1_000, Number(process.env.PAIRING_DELAY_MS) || 3_000);
 
+const httpAgent = new https.Agent({ keepAlive: true, maxSockets: 100, keepAliveMsecs: 15000, scheduling: 'fifo' });
+
+const methodCodeQR = process.argv.includes('--qr');
+const methodCode = process.argv.includes('code') || process.argv.includes('--code');
+
+let waVersion: number[] | undefined;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let pairTimer: NodeJS.Timeout | null = null;
 let codeRequested = false;
@@ -40,6 +53,25 @@ let reiniciando = false;
 let pairSuccess = false;
 let activeSock: any = null;
 let numeroVinculacion = '';
+
+function normalizePhone(input: any): string {
+  let s = String(input ?? '').replace(/\D/g, '');
+  if (!s) return '';
+  s = s.replace(/^0+/, '');
+  if (s.length === 10 && s.startsWith('3')) s = '57' + s;
+  if (process.env.PAIRING_LEGACY_PREFIX === '1') {
+    if (s.startsWith('52') && !s.startsWith('521') && s.length >= 12) s = '521' + s.slice(2);
+    if (s.startsWith('54') && !s.startsWith('549') && s.length >= 11) s = '549' + s.slice(2);
+  }
+  return s;
+}
+
+function limpiarSesion(): void {
+  if (fs.existsSync(sessionDir)) {
+    try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch { /* ignorar */ }
+  }
+  fs.mkdirSync(sessionDir, { recursive: true });
+}
 
 function banner(): void {
   const line = '─'.repeat(52);
@@ -52,47 +84,72 @@ function banner(): void {
   console.log(`   🧩 Comandos   : ${commandCount()}`);
   console.log(`   🔌 APIs       : ${Object.values(apis).filter(a => a.enabled).map(a => a.label).join(' · ')}`);
   console.log(`   🔐 Sesión     : ${sessionDir}`);
-  console.log(`   📲 Vinculación: ${bot.auth === 'code' ? `Código de 8 dígitos (+${numeroVinculacion || bot.owner.number}) · vence en ${TTL_TEXTO}` : 'QR en terminal'}\n`);
+  console.log(`   📲 Vinculación: ${bot.auth === 'code' ? `Código de 8 dígitos (+${numeroVinculacion || bot.owner.number}) · vence en ${TTL_TEXTO}` : 'QR en terminal'}`);
+  if (waVersion) console.log(`   🆕 WA Web     : ${waVersion.join('.')} (versión actual)`);
+  console.log('');
 }
 
-function askQuestion(pregunta: string): Promise<string> {
+let consola: readline.Interface | null = null;
+let pendiente: ((valor: string) => void) | null = null;
+const colaLineas: string[] = [];
+
+function initConsola(): void {
+  if (consola) return;
+  consola = readline.createInterface({ input: process.stdin, output: process.stdout });
+  consola.on('line', linea => {
+    if (pendiente) { const fn = pendiente; pendiente = null; fn(linea); }
+    else colaLineas.push(linea);
+  });
+  consola.on('close', () => {
+    if (pendiente) { const fn = pendiente; pendiente = null; fn(''); }
+    consola = null;
+  });
+}
+
+const askQuestion = async (query: string): Promise<string> => {
+  initConsola();
+  process.stdout.write(query);
+  const enCola = colaLineas.shift();
+  if (enCola !== undefined) return enCola.trim();
   return new Promise<string>(resolve => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     let cerrado = false;
-    let timer: NodeJS.Timeout | undefined;
-    const responder = (valor: string): void => {
+    const timer = setTimeout(() => responder(''), 60_000);
+    timer.unref();
+    function responder(valor: string): void {
       if (cerrado) return;
       cerrado = true;
-      if (timer) clearTimeout(timer);
-      rl.close();
+      clearTimeout(timer);
+      if (pendiente === responder) pendiente = null;
       resolve(valor.trim());
-    };
-    rl.question(pregunta, respuesta => responder(respuesta ?? ''));
-    rl.on('close', () => responder(''));
-    timer = setTimeout(() => responder(''), 60_000);
-    timer.unref();
+    }
+    pendiente = responder;
   });
+};
+
+function displayLoadingMessage(): void {
+  console.log(chalk.bold.white(`\nPor favor, ingresa tu número de WhatsApp.\n` +
+    `${chalk.bold.cyan('Ejemplo: +52 1 33 1916 4806  /  +51 926 519 334')}\n` +
+    `${chalk.bold.white('---> ')} `));
 }
 
 async function elegirVinculacion(): Promise<void> {
   const metodo = (process.env.AUTH_METHOD || '').trim().toLowerCase();
-  const argv = process.argv.slice(2);
-  const methodCodeQR = metodo === 'qr' || metodo === '1' || argv.includes('--qr');
-  const methodCode = metodo === 'code' || metodo === 'pairing' || metodo === '2' || argv.includes('--code') || argv.includes('--pairing');
+  const forzarQR = methodCodeQR || metodo === 'qr' || metodo === '1';
+  const forzarCodigo = methodCode || metodo === 'code' || metodo === 'pairing' || metodo === '2';
 
   let opcion = '';
   let usarCodigo = false;
 
-  if (methodCodeQR) {
+  if (forzarQR) {
     opcion = '1';
-    console.log(chalk.gray('   AUTH_METHOD=qr → Código QR, sin preguntar.'));
-  } else if (methodCode) {
+    console.log(chalk.gray('   → Código QR, sin preguntar.'));
+  } else if (forzarCodigo) {
     opcion = '2';
     usarCodigo = true;
-    console.log(chalk.gray('   AUTH_METHOD=code → Código de 8 dígitos, sin preguntar.'));
+    console.log(chalk.gray('   → Código de 8 dígitos, sin preguntar.'));
   } else if (!process.stdin.isTTY) {
     opcion = '1';
-    console.log(chalk.gray('   Sin terminal interactiva → QR. Usa AUTH_METHOD=qr|code o --qr/--code para elegir.'));
+    console.log(chalk.gray('   Sin terminal interactiva → QR. Usa AUTH_METHOD=qr|code o --qr/code.'));
   } else {
     const lineM = '⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ 》';
     console.log(chalk.white(`╭${lineM}`));
@@ -123,14 +180,15 @@ async function elegirVinculacion(): Promise<void> {
     bot.pairingCode = '';
   }
 
-  const porDefecto = (process.env.PAIRING_NUMBER || bot.owner.number || '').replace(/[^0-9]/g, '');
-  let numero = porDefecto;
+  let numero = normalizePhone(process.env.PAIRING_NUMBER || '');
   if (process.stdin.isTTY) {
-    const respuesta = await askQuestion(chalk.bold.white(`   ┊ TU número a vincular, con código de país y sin + (Enter = ${porDefecto}): `));
-    if (respuesta) numero = respuesta.replace(/[^0-9]/g, '');
+    displayLoadingMessage();
+    const respuesta = await askQuestion('');
+    numero = normalizePhone(respuesta || numero || bot.owner.number);
   }
+  if (!numero) numero = normalizePhone(bot.owner.number);
   if (!numero) {
-    console.error('❌ Para el código de 8 dígitos define OWNER_NUMBER o PAIRING_NUMBER en .env, o un número en config.ts.');
+    console.error('❌ Para el código define PAIRING_NUMBER en .env o un número en config.ts.');
     process.env.AUTH_METHOD = 'qr';
     config.auth = 'qr';
     bot.auth = 'qr';
@@ -146,12 +204,7 @@ async function elegirVinculacion(): Promise<void> {
   console.log(chalk.cyan(`   📞 Se vinculará +${numero}\n`));
 }
 
-function limpiarSesion(): void {
-  fs.rmSync(sessionDir, { recursive: true, force: true });
-  fs.mkdirSync(sessionDir, { recursive: true });
-}
-
-function reiniciarVinculacion(motivo: string, ms = 1200): void {
+function reiniciarVinculacion(motivo: string, ms = 2000): void {
   if (reiniciando || connected || bot.auth !== 'code') return;
   reiniciando = true;
   console.log(chalk.yellow(`\n${motivo}\n`));
@@ -165,7 +218,7 @@ function reiniciarVinculacion(motivo: string, ms = 1200): void {
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     reiniciando = false;
-    start().catch(e => console.error('[RECONNECT]', e));
+    start(true).catch(e => console.error('[RECONNECT]', e));
   }, ms);
 }
 
@@ -179,55 +232,80 @@ function programarVencimiento(): void {
   pairTimer.unref?.();
 }
 
-async function start(): Promise<void> {
+async function start(nuevaSesion = false): Promise<void> {
   fs.mkdirSync(sessionDir, { recursive: true });
+  if (nuevaSesion && bot.auth === 'code') limpiarSesion();
+
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
 
   const sock = makeWASocket({
-    auth: state,
     logger,
-    browser: Browsers.ubuntu('Chrome'),
     printQRInTerminal: false,
+    version: (waVersion || undefined) as any,
+    browser: Browsers.macOS('Safari'),
+    auth: {
+      creds: state.creds,
+      keys: makeCacheableSignalKeyStore(state.keys, logger),
+    },
+    markOnlineOnConnect: false,
+    emitOwnEvents: false,
+    generateHighQualityLinkPreview: false,
     syncFullHistory: false,
-    markOnlineOnConnect: true,
-    generateHighQualityLinkPreview: true,
+    downloadHistory: false,
+    fireInitQueries: false,
+    keepAliveIntervalMs: 30000,
+    connectTimeoutMs: 60000,
+    defaultQueryTimeoutMs: undefined,
+    retryRequestDelayMs: 250,
+    getMessage: async () => undefined,
+    fetchOpts: { agent: httpAgent } as any,
   } as any);
 
   activeSock = sock;
   setMainSocket(sock);
-  sock.ev.on('creds.update', saveCreds);
+  sock.ev.on('creds.update', async () => { await saveCreds(); });
+
+  const esQR = bot.auth === 'qr';
 
   function solicitarCodigo(): void {
     if (bot.auth !== 'code' || codeRequested || codeInFlight || connected || state.creds.registered || reiniciando) return;
     codeInFlight = true;
-    const numero = numeroVinculacion || bot.owner.number;
+    const numero = numeroVinculacion || normalizePhone(bot.owner.number);
     console.log(chalk.cyan('   ⏳ Pidiendo el código de 8 dígitos a WhatsApp…'));
     void pedirCodigoVinculacion({
       sock,
       numero,
       customCode: bot.pairingCode || undefined,
+      intentos: 12,
+      esperaMs: 1000,
       onCode: (code: string) => {
         codeRequested = true;
+        const bonito = code.match(/.{1,4}/g)?.join('-') || code;
         const vence = new Date(Date.now() + CODE_TTL_MS);
         const hora = vence.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit', timeZone: bot.timezone });
-        console.log(`\n🔐 CÓDIGO DE VINCULACIÓN: ${code}`);
-        console.log(`   Número : +${numero}`);
+        console.log(chalk.white.bgBlue(' CODIGO DE VINCULACION ') + chalk.bold.white(` : ${bonito}`));
+        console.log(`   📞 Número : +${numero}`);
         console.log(`   ⏱️  Vence en ${TTL_TEXTO} (${hora}) · se genera uno nuevo solo al vencer`);
         console.log(`   WhatsApp → Ajustes → Dispositivos vinculados → Vincular con número de teléfono\n`);
         programarVencimiento();
       },
       onError: (mensaje: string) => {
-        console.error(`❌ No se pudo pedir el código de vinculación: ${mensaje}`);
+        console.error(chalk.red('[ ERROR ] Falla al generar código de vinculación:'), mensaje);
+        reiniciarVinculacion('♻️  Limpiando sesión y reintentando con un código nuevo…');
       },
     }).finally(() => { codeInFlight = false; });
   }
 
-  sock.ev.on('connection.update', async (update: any) => {
-    const { connection, lastDisconnect, qr, isNewLogin } = update;
+  if (!esQR && !state.creds.registered) {
+    setTimeout(solicitarCodigo, PAIRING_DELAY_MS).unref?.();
+  }
+
+  sock.ev.on('connection.update', async (u: any) => {
+    const { connection, lastDisconnect, qr, isNewLogin } = u;
     if (isNewLogin) pairSuccess = true;
 
     if (qr && !state.creds.registered) {
-      if (bot.auth === 'qr') {
+      if (esQR) {
         console.log('\n📲 Escanea este QR con WhatsApp → Dispositivos vinculados:\n');
         qrcode.generate(qr, { small: true });
       } else {
@@ -245,23 +323,23 @@ async function start(): Promise<void> {
     if (connection === 'close') {
       if (reiniciando) return;
       connected = false;
-      const status = (lastDisconnect?.error as any)?.output?.statusCode;
-      const reason = status ?? 'desconocido';
-      if (status === DisconnectReason.loggedOut) {
+      const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+      const isStreamError = String((lastDisconnect?.error as any)?.message ?? '').includes('Stream Errored');
+
+      if (statusCode === 515 || isStreamError) {
+        console.log(chalk.yellow('[ RECONNECT ] Reiniciando socket por actualización de sesión...'));
+        if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; start(false).catch(e => console.error('[RECONNECT]', e)); }, 2000);
+      } else if (statusCode === DisconnectReason.loggedOut) {
         if (bot.auth === 'code' && !state.creds.registered && !pairSuccess) {
           reiniciarVinculacion('♻️  WhatsApp cerró la vinculación a medias. Limpiando sesión y pidiendo un código nuevo…');
           return;
         }
-        if (pairSuccess) {
-          console.log('🔄 WhatsApp pide reiniciar para terminar la vinculación…');
-        } else {
-          console.log('🚪 Sesión cerrada desde el teléfono. Borra la carpeta session/ para volver a vincular.');
-          return;
-        }
-      }
-      console.log(`⚠️ Conexión cerrada (${reason}). Reconectando en 3s…`);
-      if (!reconnectTimer) {
-        reconnectTimer = setTimeout(() => { reconnectTimer = null; start().catch(e => console.error('[RECONNECT]', e)); }, 3000);
+        console.log(chalk.red('[ SESSION ] Sesión cerrada desde el teléfono. Limpiando...'));
+        limpiarSesion();
+        if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; start(true).catch(e => console.error('[RECONNECT]', e)); }, 2000);
+      } else {
+        console.log(chalk.yellow(`⚠️ Conexión cerrada (${statusCode ?? 'desconocido'}). Reconectando en 3s…`));
+        if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; start(false).catch(e => console.error('[RECONNECT]', e)); }, 3000);
       }
     }
   });
@@ -269,13 +347,16 @@ async function start(): Promise<void> {
   sock.ev.on('messages.upsert', async ({ messages, type }: any) => {
     if (type !== 'notify') return;
     for (const msg of messages ?? []) {
+      if (!msg?.key?.id || !msg.message) continue;
+      const jid = msg.key.remoteJid || '';
+      if (jid === 'status@broadcast' || jid.endsWith('@broadcast')) continue;
       await handleMessage(sock, msg);
     }
   });
 
-  sock.ev.on('group-participants.update', async (event: any) => {
-    invalidateGroupCache(event?.jid);
-    await handleGroupParticipants(sock, event);
+  sock.ev.on('group-participants.update', async (update: any) => {
+    invalidateGroupCache(update?.id);
+    await handleGroupParticipants(sock, update);
   });
   sock.ev.on('groups.update', (events: any[]) => {
     for (const e of events ?? []) if (e?.id) invalidateGroupCache(e.id);
@@ -292,39 +373,25 @@ async function start(): Promise<void> {
       }
     });
   }
-
-  if (bot.auth === 'code' && !state.creds.registered) {
-    setTimeout(solicitarCodigo, PAIRING_FALLBACK_MS).unref?.();
-  }
-}
-
-function limpiarSesionIncompleta(): void {
-  if (bot.auth !== 'code') return;
-  try {
-    const credPath = path.join(sessionDir, 'creds.json');
-    if (!fs.existsSync(credPath)) return;
-    const creds = JSON.parse(fs.readFileSync(credPath, 'utf8'));
-    if (creds?.registered) return;
-    if (!creds?.me && !creds?.pairingCode) return;
-    limpiarSesion();
-    console.log(chalk.yellow('   ♻️ Había una vinculación a medias: se limpió session/ para pedir un código nuevo.\n'));
-  } catch {
-    return;
-  }
 }
 
 async function main(): Promise<void> {
+  try {
+    const r = await fetchLatestBaileysVersion();
+    waVersion = r.version;
+    if (!r.isLatest) console.log(chalk.yellow('   ⚠️ No se pudo consultar la versión de WA Web; se usa la del fork.'));
+  } catch {
+    console.log(chalk.yellow('   ⚠️ No se pudo consultar la versión de WA Web; se usa la del fork.'));
+  }
+
   await elegirVinculacion();
-  limpiarSesionIncompleta();
   const loaded = await loadCommands();
   banner();
-  if (!loaded) {
-    console.warn('⚠️ No se cargó ningún comando. Revisa la carpeta commands/.');
-  }
+  if (!loaded) console.warn('⚠️ No se cargó ningún comando. Revisa la carpeta commands/.');
   applySettings();
   setSubMessageHandler((sock, msg) => { void handleMessage(sock, msg, { isSubbot: true }); });
   await restoreSubs().catch(e => console.error('[SUBBOT] restore:', e));
-  await start();
+  await start(true);
 }
 
 main().catch(error => {

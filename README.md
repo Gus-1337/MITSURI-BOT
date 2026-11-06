@@ -38,7 +38,7 @@ npm install
 npm start
 ```
 
-Node.js ≥ 20. Si la conexión devuelve `405`, es bloqueo de red al WebSocket de WhatsApp (sandbox/proxy), no del bot.
+Node.js ≥ 20. El fork trae una versión vieja de WA Web (`2.3000.1035194821`) que hace que WhatsApp rechace el WebSocket con `405`; `index.ts` consulta `fetchLatestBaileysVersion()` y usa la vigente (`2.3000.1043857760`). Si aun así ves `405`, es bloqueo de red (VPN/proxy/sandbox).
 
 ### 🔄 Actualizar (si ya instalaste antes)
 
@@ -169,7 +169,7 @@ cd && cd MITSURI-BOT && rm -rf session && npm start
 |---|---|
 | No aparece el código / `Connection Closed` / «Sesión cerrada desde el teléfono» | Copia vieja: `cd ~/MITSURI-BOT && bash update.sh`. Elegí `2`, poné tu número y esperá 5–10 s. Sin VPN ni proxy. |
 | El código venció | Dura 2 minutos; el bot muestra uno nuevo solo. No hace que lo hagas a mano. `PAIRING_TTL_MS` en `.env` lo cambia. |
-| `405` al conectar | Bloqueo de red al WebSocket de WhatsApp (VPN, firewall de datos, sandbox). Probá otra red. |
+| `405` al conectar | Versión vieja de WA Web o red bloqueada. Corré `bash update.sh`; el banner debe mostrar `🆕 WA Web : 2.3000.1043857760`. Si dice «se usa la del fork», probá otra WiFi/datos y desactivá VPN. |
 | `Could not load the "sharp" module using the android-arm64 runtime` | `npm install --force --no-save @img/sharp-wasm32` o `bash install-termux.sh`. El bot arranca igual; solo `.sticker` y `.toimg` avisan. |
 | `node -v` menor a 20 | `pkg install -y nodejs-lts` |
 | `npm install` falla al traer Baileys | Falta `git`: `pkg install -y git` |
@@ -195,20 +195,34 @@ Al arrancar, `index.ts` pregunta cómo quieres vincular:
 --->
 ```
 
-Escribe `1` o `2`. Con la opción 2 te pide **tu número** (con código de país, sin `+`; Enter = dueño) y después de unos segundos imprime:
+Escribe `1` o `2`. Con la opción 2 te pide **tu número**:
 
 ```
-🔐 CÓDIGO DE VINCULACIÓN: A1B2C3D4
-   Número : +523319164806
+Por favor, ingresa tu número de WhatsApp.
+Ejemplo: +52 1 33 1916 4806  /  +51 926 519 334
+--->
+```
+
+y a los 3 segundos imprime:
+
+```
+ CODIGO DE VINCULACION  : A1B2-C3D4
+   📞 Número : +523319164806
    ⏱️  Vence en 2 minutos (11:52) · se genera uno nuevo solo al vencer
    WhatsApp → Ajustes → Dispositivos vinculados → Vincular con número de teléfono
 ```
 
 En el celular: **WhatsApp → Ajustes → Dispositivos vinculados → Vincular con número de teléfono** → escribí ese código. El número elegido se agrega a los dueños de la sesión.
 
-**El código dura 2 minutos.** No se regenera a cada rato: al vencer, el bot limpia la sesión, se reconecta y muestra uno nuevo (`⏱️ El código venció a los 2 minutos. Generando uno nuevo…`). Podés cambiar el tiempo con `PAIRING_TTL_MS` en `.env` (milisegundos, mínimo 30000). Si WhatsApp cierra la vinculación a medias con `401`, tampoco se muere: se autolimpia y pide otro código en vez de decir «sesión cerrada desde el teléfono».
+**Conexión reescrita siguiendo un flujo que sí entrega el código:**
 
-`lib/pairing.ts` espera a que el socket esté realmente listo antes de pedir el código: este fork de Baileys emite `connection: 'connecting'` antes de abrir el WebSocket, y pedirlo ahí falla con *Connection Closed* (por eso antes no salía ningún código). Además, si quedó una vinculación a medias en `session/`, se limpia sola al arrancar.
+- `fetchLatestBaileysVersion()` antes de conectar y se pasa `version` al socket. El fork trae `2.3000.1035194821` y WhatsApp ya usa `2.3000.1043857760`: con la versión vieja el WebSocket responde **405** y nunca se abre. El banner muestra la versión en uso.
+- `makeCacheableSignalKeyStore`, `Browsers.macOS('Safari')`, `connectTimeoutMs: 60000`, `keepAliveIntervalMs: 30000`, agente HTTPS keep-alive y las opciones ligeras (`fireInitQueries: false`, `downloadHistory: false`, `markOnlineOnConnect: false`…).
+- **Se borra `session/` antes de crear el socket** cuando no estás registrado, igual que en el ejemplo, y se recargan las credenciales. Nada de `creds.me` viejo → nada de `401`.
+- El código se pide **3 segundos después de crear el socket** (no en `connection: 'connecting'`, que este fork emite demasiado pronto y daba *Connection Closed*), con reintentos desde `lib/pairing.ts` hasta que el WebSocket esté abierto.
+- Reconexión: `515` / *Stream Errored* reinicia el socket, `401` limpia sesión y pide código nuevo, cualquier otro cierre reintenta a los 3 s.
+
+**El código dura 2 minutos** y solo se regenera al vencer (`PAIRING_TTL_MS`). `normalizePhone` limpia el número, quita ceros, convierte los 10 dígitos colombianos a `57` y, si ponés `PAIRING_LEGACY_PREFIX=1`, aplica los prefijos viejos `521`/`549` de México/Argentina.
 
 Para saltar la pregunta:
 
@@ -219,13 +233,13 @@ npm start -- --qr
 npm start -- --code
 ```
 
-`PAIRING_CODE` fija un código propio de 8 caracteres, `PAIRING_TTL_MS` el tiempo de vida (por defecto `120000` = 2 min). En servidores sin terminal interactiva (PM2, Docker, CI) no se pregunta: usa QR salvo que definas `AUTH_METHOD` y `PAIRING_NUMBER`. Las variables se leen de `.env` (`dotenv/config` en `index.ts`) o del entorno.
+`PAIRING_CODE` fija un código propio de 8 caracteres, `PAIRING_TTL_MS` el tiempo de vida (`120000` = 2 min), `PAIRING_DELAY_MS` la espera antes de pedirlo (`3000`), `PAIRING_LEGACY_PREFIX=1` activa los prefijos viejos `521`/`549`. En servidores sin terminal interactiva (PM2, Docker, CI) no se pregunta: usa QR salvo que definas `AUTH_METHOD` y `PAIRING_NUMBER`. Las variables se leen de `.env` (`dotenv/config` en `index.ts`) o del entorno. También `npm start -- --qr`, `npm start -- --code` o `npm start -- code`.
 
-> **¿Sigue sin salir el código o dice `Connection Closed` / «Sesión cerrada desde el teléfono»?** Estás corriendo una copia vieja. Un solo comando lo arregla:
+> **¿Sigue sin salir el código o dice `405`?** Un solo comando actualiza todo y arranca con sesión limpia:
 > ```bash
 > cd ~/MITSURI-BOT && bash update.sh
 > ```
-> Elegí `2`, poné tu número y esperá de 5 a 10 segundos (verás `⏳ Pidiendo el código de 8 dígitos a WhatsApp…`). Desactivá VPN/proxy y probá con datos móviles u otra WiFi; un `405` significa que la red bloquea el WebSocket de WhatsApp, no un error del bot.
+> Elegí `2`, poné tu número y esperá 3–10 segundos. En el banner tiene que decir `🆕 WA Web : 2.3000.1043857760 (versión actual)`; si dice «se usa la del fork», tu red no llega a `raw.githubusercontent.com` (probá otra WiFi o datos móviles). Desactivá VPN/proxy; un `405` persistente significa que la red bloquea el WebSocket de WhatsApp.
 
 ---
 
@@ -333,6 +347,6 @@ Multi-Device real (sesión en `session/`, QR o pairing code, reconexión), sub-b
 
 ## Verificado
 
-`npm run typecheck` · `npm run build` · arranque con 84 comandos y 9 APIs · 43 endpoints · 19 categorías · botones/listas · hot-reload · menú de vinculación QR/código · código de 8 dígitos impreso con socket real y probado con `lib/pairing.ts` (5 casos) · TTL de 2 minutos con regeneración · autolimpieza de sesión en `401` · `update.sh` · `install-termux.sh` · `sharp` probado con solo WASM (y el bot arrancando igual sin `sharp`) · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
+`npm run typecheck` · `npm run build` · arranque con 84 comandos y 9 APIs · 43 endpoints · 19 categorías · botones/listas · hot-reload · menú de vinculación QR/código · `fetchLatestBaileysVersion()` → `2.3000.1043857760` · socket con `makeCacheableSignalKeyStore` + `Browsers.macOS('Safari')` · sesión limpia antes de vincular · código de 8 dígitos impreso con socket real (formato `XXXX-XXXX`) y probado con `lib/pairing.ts` · TTL de 2 minutos con regeneración · reconexión `515`/`401` · `update.sh` · `install-termux.sh` · `sharp` probado con solo WASM · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
 
 MIT 🌸
