@@ -25,10 +25,20 @@ import { sleep } from './lib/utils.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
 const sessionDir = path.resolve(process.cwd(), bot.sessionDir);
+const CODE_TTL_MS = Math.max(5_000, Number(process.env.PAIRING_TTL_MS) || 120_000);
+const PAIRING_FALLBACK_MS = Math.max(500, Number(process.env.PAIRING_FALLBACK_MS) || 10_000);
+const TTL_TEXTO = CODE_TTL_MS >= 60_000
+  ? `${Math.round(CODE_TTL_MS / 60_000)} minuto${Math.round(CODE_TTL_MS / 60_000) === 1 ? '' : 's'}`
+  : `${Math.round(CODE_TTL_MS / 1000)} segundos`;
 
 let reconnectTimer: NodeJS.Timeout | null = null;
+let pairTimer: NodeJS.Timeout | null = null;
 let codeRequested = false;
 let codeInFlight = false;
+let connected = false;
+let reiniciando = false;
+let pairSuccess = false;
+let activeSock: any = null;
 let numeroVinculacion = '';
 
 function banner(): void {
@@ -42,7 +52,7 @@ function banner(): void {
   console.log(`   🧩 Comandos   : ${commandCount()}`);
   console.log(`   🔌 APIs       : ${Object.values(apis).filter(a => a.enabled).map(a => a.label).join(' · ')}`);
   console.log(`   🔐 Sesión     : ${sessionDir}`);
-  console.log(`   📲 Vinculación: ${bot.auth === 'code' ? `Código de 8 dígitos (+${numeroVinculacion || bot.owner.number})` : 'QR en terminal'}\n`);
+  console.log(`   📲 Vinculación: ${bot.auth === 'code' ? `Código de 8 dígitos (+${numeroVinculacion || bot.owner.number}) · vence en ${TTL_TEXTO}` : 'QR en terminal'}\n`);
 }
 
 function askQuestion(pregunta: string): Promise<string> {
@@ -136,6 +146,39 @@ async function elegirVinculacion(): Promise<void> {
   console.log(chalk.cyan(`   📞 Se vinculará +${numero}\n`));
 }
 
+function limpiarSesion(): void {
+  fs.rmSync(sessionDir, { recursive: true, force: true });
+  fs.mkdirSync(sessionDir, { recursive: true });
+}
+
+function reiniciarVinculacion(motivo: string, ms = 1200): void {
+  if (reiniciando || connected || bot.auth !== 'code') return;
+  reiniciando = true;
+  console.log(chalk.yellow(`\n${motivo}\n`));
+  if (pairTimer) { clearTimeout(pairTimer); pairTimer = null; }
+  try { activeSock?.end?.(new Error('reiniciar vinculación')); } catch { /* ya cerrado */ }
+  limpiarSesion();
+  codeRequested = false;
+  codeInFlight = false;
+  pairSuccess = false;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    reiniciando = false;
+    start().catch(e => console.error('[RECONNECT]', e));
+  }, ms);
+}
+
+function programarVencimiento(): void {
+  if (pairTimer) clearTimeout(pairTimer);
+  pairTimer = setTimeout(() => {
+    pairTimer = null;
+    if (connected) return;
+    reiniciarVinculacion(`⏱️  El código venció (${TTL_TEXTO}). Generando uno nuevo…`);
+  }, CODE_TTL_MS);
+  pairTimer.unref?.();
+}
+
 async function start(): Promise<void> {
   fs.mkdirSync(sessionDir, { recursive: true });
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
@@ -150,11 +193,12 @@ async function start(): Promise<void> {
     generateHighQualityLinkPreview: true,
   } as any);
 
+  activeSock = sock;
   setMainSocket(sock);
   sock.ev.on('creds.update', saveCreds);
 
   function solicitarCodigo(): void {
-    if (bot.auth !== 'code' || codeRequested || codeInFlight || state.creds.registered) return;
+    if (bot.auth !== 'code' || codeRequested || codeInFlight || connected || state.creds.registered || reiniciando) return;
     codeInFlight = true;
     const numero = numeroVinculacion || bot.owner.number;
     console.log(chalk.cyan('   ⏳ Pidiendo el código de 8 dígitos a WhatsApp…'));
@@ -164,7 +208,13 @@ async function start(): Promise<void> {
       customCode: bot.pairingCode || undefined,
       onCode: (code: string) => {
         codeRequested = true;
-        console.log(`\n🔐 CÓDIGO DE VINCULACIÓN: ${code}\n   Número: +${numero}\n   WhatsApp → Ajustes → Dispositivos vinculados → Vincular con número de teléfono\n`);
+        const vence = new Date(Date.now() + CODE_TTL_MS);
+        const hora = vence.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit', timeZone: bot.timezone });
+        console.log(`\n🔐 CÓDIGO DE VINCULACIÓN: ${code}`);
+        console.log(`   Número : +${numero}`);
+        console.log(`   ⏱️  Vence en ${TTL_TEXTO} (${hora}) · se genera uno nuevo solo al vencer`);
+        console.log(`   WhatsApp → Ajustes → Dispositivos vinculados → Vincular con número de teléfono\n`);
+        programarVencimiento();
       },
       onError: (mensaje: string) => {
         console.error(`❌ No se pudo pedir el código de vinculación: ${mensaje}`);
@@ -173,7 +223,8 @@ async function start(): Promise<void> {
   }
 
   sock.ev.on('connection.update', async (update: any) => {
-    const { connection, lastDisconnect, qr } = update;
+    const { connection, lastDisconnect, qr, isNewLogin } = update;
+    if (isNewLogin) pairSuccess = true;
 
     if (qr && !state.creds.registered) {
       if (bot.auth === 'qr') {
@@ -185,16 +236,28 @@ async function start(): Promise<void> {
     }
 
     if (connection === 'open') {
+      connected = true;
+      if (pairTimer) { clearTimeout(pairTimer); pairTimer = null; }
       console.log(`✅ ${bot.name} conectado como ${sock.user?.id ?? 'desconocido'}`);
       console.log(`   Escribe ${bot.prefix}menu en cualquier chat para empezar.\n`);
     }
 
     if (connection === 'close') {
+      if (reiniciando) return;
+      connected = false;
       const status = (lastDisconnect?.error as any)?.output?.statusCode;
-      const reason = status ?? (lastDisconnect?.error as any)?.output?.statusCode ?? 'desconocido';
+      const reason = status ?? 'desconocido';
       if (status === DisconnectReason.loggedOut) {
-        console.log('🚪 Sesión cerrada desde el teléfono. Borra la carpeta session/ para volver a vincular.');
-        return;
+        if (bot.auth === 'code' && !state.creds.registered && !pairSuccess) {
+          reiniciarVinculacion('♻️  WhatsApp cerró la vinculación a medias. Limpiando sesión y pidiendo un código nuevo…');
+          return;
+        }
+        if (pairSuccess) {
+          console.log('🔄 WhatsApp pide reiniciar para terminar la vinculación…');
+        } else {
+          console.log('🚪 Sesión cerrada desde el teléfono. Borra la carpeta session/ para volver a vincular.');
+          return;
+        }
       }
       console.log(`⚠️ Conexión cerrada (${reason}). Reconectando en 3s…`);
       if (!reconnectTimer) {
@@ -231,7 +294,7 @@ async function start(): Promise<void> {
   }
 
   if (bot.auth === 'code' && !state.creds.registered) {
-    setTimeout(solicitarCodigo, 10_000).unref?.();
+    setTimeout(solicitarCodigo, PAIRING_FALLBACK_MS).unref?.();
   }
 }
 
@@ -243,8 +306,7 @@ function limpiarSesionIncompleta(): void {
     const creds = JSON.parse(fs.readFileSync(credPath, 'utf8'));
     if (creds?.registered) return;
     if (!creds?.me && !creds?.pairingCode) return;
-    fs.rmSync(sessionDir, { recursive: true, force: true });
-    fs.mkdirSync(sessionDir, { recursive: true });
+    limpiarSesion();
     console.log(chalk.yellow('   ♻️ Había una vinculación a medias: se limpió session/ para pedir un código nuevo.\n'));
   } catch {
     return;

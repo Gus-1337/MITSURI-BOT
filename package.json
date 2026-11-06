@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit false --outDir dist",
     "start:build": "node dist/index.js",
-    "install:termux": "bash install-termux.sh"
+    "install:termux": "bash install-termux.sh",
+    "update": "bash update.sh"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "git+https://github.com/Andresv27728/baileys-beta.git",

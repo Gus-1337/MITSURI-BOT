@@ -29,6 +29,7 @@ MITSURI-BOT/
 ├── config.ts            # globals + config + banners + links + endpoints + categorías
 ├── handler.ts  index.ts
 ├── install-termux.sh    # instalador de un toque para Android
+├── update.sh            # git pull + npm install + sesión limpia + arrancar
 └── package.json  tsconfig.json  .env.example  .gitignore
 ```
 
@@ -38,6 +39,14 @@ npm start
 ```
 
 Node.js ≥ 20. Si la conexión devuelve `405`, es bloqueo de red al WebSocket de WhatsApp (sandbox/proxy), no del bot.
+
+### 🔄 Actualizar (si ya instalaste antes)
+
+```bash
+cd ~/MITSURI-BOT && bash update.sh
+```
+
+Hace `git pull` + `npm install` + `rm -rf session` + `npm start`. **Usalo siempre que el bot no muestre el código**: evita quedarte con una copia vieja o una sesión a medias. También como `npm run update`.
 
 ---
 
@@ -158,7 +167,8 @@ cd && cd MITSURI-BOT && rm -rf session && npm start
 
 | Síntoma | Arreglo |
 |---|---|
-| No aparece el código de 8 dígitos | `cd && cd MITSURI-BOT && rm -rf session && npm start`, elegí `2` y esperá unos segundos. Sin VPN ni proxy, con datos móviles o WiFi estable. |
+| No aparece el código / `Connection Closed` / «Sesión cerrada desde el teléfono» | Copia vieja: `cd ~/MITSURI-BOT && bash update.sh`. Elegí `2`, poné tu número y esperá 5–10 s. Sin VPN ni proxy. |
+| El código venció | Dura 2 minutos; el bot muestra uno nuevo solo. No hace que lo hagas a mano. `PAIRING_TTL_MS` en `.env` lo cambia. |
 | `405` al conectar | Bloqueo de red al WebSocket de WhatsApp (VPN, firewall de datos, sandbox). Probá otra red. |
 | `Could not load the "sharp" module using the android-arm64 runtime` | `npm install --force --no-save @img/sharp-wasm32` o `bash install-termux.sh`. El bot arranca igual; solo `.sticker` y `.toimg` avisan. |
 | `node -v` menor a 20 | `pkg install -y nodejs-lts` |
@@ -189,13 +199,16 @@ Escribe `1` o `2`. Con la opción 2 te pide **tu número** (con código de país
 
 ```
 🔐 CÓDIGO DE VINCULACIÓN: A1B2C3D4
-   Número: +51926519334
+   Número : +523319164806
+   ⏱️  Vence en 2 minutos (11:52) · se genera uno nuevo solo al vencer
    WhatsApp → Ajustes → Dispositivos vinculados → Vincular con número de teléfono
 ```
 
 En el celular: **WhatsApp → Ajustes → Dispositivos vinculados → Vincular con número de teléfono** → escribí ese código. El número elegido se agrega a los dueños de la sesión.
 
-`lib/pairing.ts` espera a que el socket esté realmente listo antes de pedir el código: este fork de Baileys emite `connection: 'connecting'` antes de abrir el WebSocket, y pedirlo ahí falla con *Connection Closed* (por eso antes no salía ningún código). Además, si quedó una vinculación a medias en `session/`, se limpia sola al arrancar para generar un código nuevo.
+**El código dura 2 minutos.** No se regenera a cada rato: al vencer, el bot limpia la sesión, se reconecta y muestra uno nuevo (`⏱️ El código venció a los 2 minutos. Generando uno nuevo…`). Podés cambiar el tiempo con `PAIRING_TTL_MS` en `.env` (milisegundos, mínimo 30000). Si WhatsApp cierra la vinculación a medias con `401`, tampoco se muere: se autolimpia y pide otro código en vez de decir «sesión cerrada desde el teléfono».
+
+`lib/pairing.ts` espera a que el socket esté realmente listo antes de pedir el código: este fork de Baileys emite `connection: 'connecting'` antes de abrir el WebSocket, y pedirlo ahí falla con *Connection Closed* (por eso antes no salía ningún código). Además, si quedó una vinculación a medias en `session/`, se limpia sola al arrancar.
 
 Para saltar la pregunta:
 
@@ -206,9 +219,13 @@ npm start -- --qr
 npm start -- --code
 ```
 
-`PAIRING_CODE` fija un código propio de 8 caracteres. En servidores sin terminal interactiva (PM2, Docker, CI) no se pregunta: usa QR salvo que definas `AUTH_METHOD`. Las variables se leen de `.env` (`dotenv/config` en `index.ts`) o del entorno.
+`PAIRING_CODE` fija un código propio de 8 caracteres, `PAIRING_TTL_MS` el tiempo de vida (por defecto `120000` = 2 min). En servidores sin terminal interactiva (PM2, Docker, CI) no se pregunta: usa QR salvo que definas `AUTH_METHOD` y `PAIRING_NUMBER`. Las variables se leen de `.env` (`dotenv/config` en `index.ts`) o del entorno.
 
-> **¿Sigue sin salir el código?** `cd && cd MITSURI-BOT && rm -rf session && npm start`, elegí `2`, poné tu número y esperá de 5 a 10 segundos (verás `⏳ Pidiendo el código de 8 dígitos a WhatsApp…`). Desactivá VPN/proxy y probá con datos móviles u otra WiFi; un `405` significa que la red bloquea el WebSocket de WhatsApp, no un error del bot.
+> **¿Sigue sin salir el código o dice `Connection Closed` / «Sesión cerrada desde el teléfono»?** Estás corriendo una copia vieja. Un solo comando lo arregla:
+> ```bash
+> cd ~/MITSURI-BOT && bash update.sh
+> ```
+> Elegí `2`, poné tu número y esperá de 5 a 10 segundos (verás `⏳ Pidiendo el código de 8 dígitos a WhatsApp…`). Desactivá VPN/proxy y probá con datos móviles u otra WiFi; un `405` significa que la red bloquea el WebSocket de WhatsApp, no un error del bot.
 
 ---
 
@@ -316,6 +333,6 @@ Multi-Device real (sesión en `session/`, QR o pairing code, reconexión), sub-b
 
 ## Verificado
 
-`npm run typecheck` · `npm run build` · arranque con 84 comandos y 9 APIs · 43 endpoints · 19 categorías · botones/listas · hot-reload · menú de vinculación QR/código · código de 8 dígitos probado con socket real y con `lib/pairing.ts` (5 casos) · limpieza de sesión incompleta · `install-termux.sh` · `sharp` probado con solo WASM (y el bot arrancando igual sin `sharp`) · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
+`npm run typecheck` · `npm run build` · arranque con 84 comandos y 9 APIs · 43 endpoints · 19 categorías · botones/listas · hot-reload · menú de vinculación QR/código · código de 8 dígitos impreso con socket real y probado con `lib/pairing.ts` (5 casos) · TTL de 2 minutos con regeneración · autolimpieza de sesión en `401` · `update.sh` · `install-termux.sh` · `sharp` probado con solo WASM (y el bot arrancando igual sin `sharp`) · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
 
 MIT 🌸

@@ -82,6 +82,7 @@ fi
 
 say "✅ Instalación terminada"
 printf '  Para que no se caiga: termux-wake-lock, desactiva la optimización de batería y usa tmux.\n'
+printf '  Para actualizar mas adelante: bash update.sh\n'
 printf '  Opcional (stickers de video): pkg install -y ffmpeg\n\n'
 printf '  Al iniciar, el bot preguntará 1 (QR) o 2 (código de 8 dígitos).\n'
 printf '  En el mismo celular conviene la opción 2. Si escribes 1 o 2 aquí, vas directo a ese método.\n\n'
