@@ -24,6 +24,7 @@ MITSURI-BOT/
 │   ├── config-engine.ts # deriva bot/apis/categories/menu/limits/theme
 │   ├── config-types.ts  # tipos internos
 │   ├── db.ts  group.ts  loader.ts  menu.ts  respond.ts
+│   ├── pairing.ts       # código de 8 dígitos esperando a que el socket esté listo
 │   ├── runtime.ts  settings.ts  sharp.ts  subbot.ts  types.ts  utils.ts
 ├── config.ts            # globals + config + banners + links + endpoints + categorías
 ├── handler.ts  index.ts
@@ -40,49 +41,134 @@ Node.js ≥ 20. Si la conexión devuelve `405`, es bloqueo de red al WebSocket d
 
 ---
 
-## 📱 Instalación en Termux (Android)
+### 🔗 Instalaciónes Básicas
 
-Usa Termux de **F-Droid o GitHub**, no el de Play Store (está descontinuado y rompe con Node ≥ 20). Necesitas Android 7+, ~1 GB libre e internet estable.
+> Requiere **Node.js ≥ 20**. En Android usa Termux de **F-Droid o GitHub**, no el de Play Store (está descontinuado y rompe con Node ≥ 20).
 
-**Un solo comando**, pégalo en Termux:
+<details>
+<summary><strong>🪷 Cloud</strong> — Shell</summary>
 
 ```bash
-pkg update -y && pkg upgrade -y && pkg install -y nodejs-lts git && git clone https://github.com/Gus-1337/MITSURI-BOT.git && cd MITSURI-BOT && bash install-termux.sh
+git clone https://github.com/Gus-1337/MITSURI-BOT.git
 ```
 
-Si ya clonaste el repo: `bash install-termux.sh` o `npm run install:termux`.
-
-`install-termux.sh` instala `nodejs-lts` + `git`, activa `termux-wake-lock`, comprueba Node ≥ 20, crea `.env` desde `.env.example`, corre `npm install` y **arregla `sharp`**: en Android no hay binario nativo, así que instala `@img/sharp-wasm32` (la variante WebAssembly que el propio sharp recomienda). No hay que compilar nada: `tsx`/`esbuild` y `whatsapp-rust-bridge` ya traen binario/WASM para `android-arm64`.
-
-Después:
+```bash
+cd MITSURI-BOT
+```
 
 ```bash
-cd ~/MITSURI-BOT
+yarn install
+```
+
+```bash
+npm install
+```
+
+```bash
 npm start
 ```
 
-Ojo, son **dos preguntas distintas**: el instalador pregunta *«¿Iniciar el bot ahora? [S/n]»* (Enter o `s` = sí, `n` = no, `1` = iniciar con QR, `2` = iniciar con código); si contestas `s`, el `1`/`2` de QR o código lo pregunta **el bot** después de arrancar. Elige la **opción 2 (código de 8 dígitos)** si vinculas desde el mismo celular: escanear un QR con el mismo dispositivo es incómodo. El menú te pide el número.
+</details>
 
-**Que no se caiga**
+<details open>
+<summary><strong>🪷 Termux</strong> — Manualmente</summary>
 
 ```bash
-termux-wake-lock
-pkg install -y tmux
-tmux new -s mitsuri 'npm start'
+termux-setup-storage
+```
+```bash
+apt update && apt upgrade && pkg install -y git nodejs-lts ffmpeg yarn
 ```
 
-Desactiva la optimización de batería de Termux en Ajustes de Android y deja su notificación activa. Si cierras la sesión: `tmux attach -t mitsuri`.
+```bash
+git clone https://github.com/Gus-1337/MITSURI-BOT.git
+```
+
+```bash
+cd MITSURI-BOT
+```
+
+```bash
+yarn install
+```
+
+```bash
+npm install
+```
+
+```bash
+npm start
+```
+
+> *Si aparece **(Y/I/N/O/D/Z) [default=N] ?** use la letra **"y"** y luego **"ENTER"** para continuar con la instalación.*
+>
+> *`yarn install` es opcional: con `npm install` alcanza.*
+>
+> ⚡ **Atajo:** `bash install-termux.sh` (o `npm run install:termux`) hace todos estos pasos solo: instala Node y git, activa `termux-wake-lock`, crea `.env`, corre `npm install` y deja `sharp` funcionando con WebAssembly en Android.
+
+</details>
+
+<details>
+<summary><strong>🪷 Comandos para tener mas tiempo activo</strong> — el Bot</summary>
+
+> *Ejecutar estos comandos dentro de la carpeta MITSURI-BOT*
+```bash
+termux-wake-lock && npm i -g pm2 && pm2 start npm --name mitsuri -- start && pm2 save && pm2 logs
+```
+
+#### Opciones Disponibles
+> *Esto eliminará todo el historial que hayas establecido con PM2:*
+```bash
+pm2 delete mitsuri
+```
+
+> *Si tienes cerrado Termux y quieres ver de nuevo la ejecución usa:*
+```bash
+pm2 logs mitsuri
+```
+
+> *Si deseas detener la ejecución del Bot usa:*
+```bash
+pm2 stop mitsuri
+```
+
+> *Si deseas iniciar de nuevo la ejecución del Bot usa:*
+```bash
+pm2 start mitsuri
+```
+
+---
+
+### En caso de detenerse
+> _Si después de instalar el bot Termux te salta en blanco, se fue tu internet o reiniciaste tu celular, solo realiza estos pasos:_
+```bash
+cd && cd MITSURI-BOT && npm start
+```
+---
+### Obtener nuevo inicio de Sessión
+> *Detén el bot, haz click en el símbolo (ctrl) [default=z] usar la letra **"z"** + **"ENTER"** hasta que salga algo verde similar a: `MITSURI-BOT $`*
+
+```bash
+cd && cd MITSURI-BOT && rm -rf session && npm start
+```
+</details>
+
+<details>
+<summary><strong>🩹 Solución de problemas</strong></summary>
 
 | Síntoma | Arreglo |
 |---|---|
-| `Could not load the "sharp" module using the android-arm64 runtime` | `npm install --force --no-save @img/sharp-wasm32` o vuelve a correr `bash install-termux.sh`. El bot arranca igual; solo `.sticker` y `.toimg` avisan. |
+| No aparece el código de 8 dígitos | `cd && cd MITSURI-BOT && rm -rf session && npm start`, elegí `2` y esperá unos segundos. Sin VPN ni proxy, con datos móviles o WiFi estable. |
+| `405` al conectar | Bloqueo de red al WebSocket de WhatsApp (VPN, firewall de datos, sandbox). Probá otra red. |
+| `Could not load the "sharp" module using the android-arm64 runtime` | `npm install --force --no-save @img/sharp-wasm32` o `bash install-termux.sh`. El bot arranca igual; solo `.sticker` y `.toimg` avisan. |
 | `node -v` menor a 20 | `pkg install -y nodejs-lts` |
 | `npm install` falla al traer Baileys | Falta `git`: `pkg install -y git` |
-| `405` al conectar | Bloqueo de red al WebSocket de WhatsApp (VPN, firewall de datos móviles, sandbox). Prueba otra red. |
-| Avisos `npm warn allow-scripts` de npm 11.16+/12 | Son la nueva política de scripts: **no rompen nada** (`tsx` trae el binario de esbuild como dependencia opcional y `sharp` usa WASM). El repo ya lleva `allowScripts` en `package.json`; si los ves en una copia vieja, `git pull && npm install`. |
+| Avisos `npm warn allow-scripts` (npm 11.16+/12) | Política nueva de scripts, **no rompen nada**. El repo ya lleva `allowScripts` en `package.json`; en una copia vieja: `git pull && npm install`. |
 | Aviso de `fluent-ffmpeg` | Opcional, solo vistas previas de video: `pkg install -y ffmpeg` |
 | Se desconecta al apagar la pantalla | `termux-wake-lock` + desactivar optimización de batería |
-| Escribí `2` en «¿Iniciar el bot ahora?» y volví al prompt | No se rompió nada: esa respuesta solo cerró el instalador. Corre `npm start` y ahí sí escribe `2`. |
+| Escribí `1`/`2` en «¿Iniciar el bot ahora?» | Ahora arranca directo con QR (`1`) o código (`2`); con Enter o `s` el bot pregunta el método. |
+
+</details>
 
 ---
 
@@ -99,7 +185,17 @@ Al arrancar, `index.ts` pregunta cómo quieres vincular:
 --->
 ```
 
-Escribe `1` o `2`. Con la opción 2 te pide el número a vincular (Enter = dueño) y muestra el código de 8 dígitos para *WhatsApp → Dispositivos vinculados → Vincular con número de teléfono*. El número elegido se agrega a los dueños de la sesión.
+Escribe `1` o `2`. Con la opción 2 te pide **tu número** (con código de país, sin `+`; Enter = dueño) y después de unos segundos imprime:
+
+```
+🔐 CÓDIGO DE VINCULACIÓN: A1B2C3D4
+   Número: +51926519334
+   WhatsApp → Ajustes → Dispositivos vinculados → Vincular con número de teléfono
+```
+
+En el celular: **WhatsApp → Ajustes → Dispositivos vinculados → Vincular con número de teléfono** → escribí ese código. El número elegido se agrega a los dueños de la sesión.
+
+`lib/pairing.ts` espera a que el socket esté realmente listo antes de pedir el código: este fork de Baileys emite `connection: 'connecting'` antes de abrir el WebSocket, y pedirlo ahí falla con *Connection Closed* (por eso antes no salía ningún código). Además, si quedó una vinculación a medias en `session/`, se limpia sola al arrancar para generar un código nuevo.
 
 Para saltar la pregunta:
 
@@ -111,6 +207,8 @@ npm start -- --code
 ```
 
 `PAIRING_CODE` fija un código propio de 8 caracteres. En servidores sin terminal interactiva (PM2, Docker, CI) no se pregunta: usa QR salvo que definas `AUTH_METHOD`. Las variables se leen de `.env` (`dotenv/config` en `index.ts`) o del entorno.
+
+> **¿Sigue sin salir el código?** `cd && cd MITSURI-BOT && rm -rf session && npm start`, elegí `2`, poné tu número y esperá de 5 a 10 segundos (verás `⏳ Pidiendo el código de 8 dígitos a WhatsApp…`). Desactivá VPN/proxy y probá con datos móviles u otra WiFi; un `405` significa que la red bloquea el WebSocket de WhatsApp, no un error del bot.
 
 ---
 
@@ -218,6 +316,6 @@ Multi-Device real (sesión en `session/`, QR o pairing code, reconexión), sub-b
 
 ## Verificado
 
-`npm run typecheck` · `npm run build` · arranque con 84 comandos y 9 APIs · 43 endpoints · 19 categorías · botones/listas · hot-reload · menú de vinculación QR/código · `install-termux.sh` · `sharp` probado con solo WASM (y el bot arrancando igual sin `sharp`) · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
+`npm run typecheck` · `npm run build` · arranque con 84 comandos y 9 APIs · 43 endpoints · 19 categorías · botones/listas · hot-reload · menú de vinculación QR/código · código de 8 dígitos probado con socket real y con `lib/pairing.ts` (5 casos) · limpieza de sesión incompleta · `install-termux.sh` · `sharp` probado con solo WASM (y el bot arrancando igual sin `sharp`) · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
 
 MIT 🌸

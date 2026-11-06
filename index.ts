@@ -17,6 +17,7 @@ import makeWASocket, { useMultiFileAuthState, DisconnectReason, Browsers } from 
 import { config, bot, apis } from './config.js';
 import { handleMessage, handleGroupParticipants, invalidateGroupCache } from './handler.js';
 import { loadCommands, commandCount } from './lib/loader.js';
+import { pedirCodigoVinculacion } from './lib/pairing.js';
 import { applySettings } from './lib/settings.js';
 import { setMainSocket } from './lib/runtime.js';
 import { restoreSubs, setSubMessageHandler } from './lib/subbot.js';
@@ -27,6 +28,7 @@ const sessionDir = path.resolve(process.cwd(), bot.sessionDir);
 
 let reconnectTimer: NodeJS.Timeout | null = null;
 let codeRequested = false;
+let codeInFlight = false;
 let numeroVinculacion = '';
 
 function banner(): void {
@@ -106,10 +108,15 @@ async function elegirVinculacion(): Promise<void> {
 
   if (!usarCodigo) return;
 
+  if (bot.pairingCode && bot.pairingCode.length !== 8) {
+    console.log(chalk.yellow(`   PAIRING_CODE debe tener 8 caracteres (tiene ${bot.pairingCode.length}), se genera uno automático.`));
+    bot.pairingCode = '';
+  }
+
   const porDefecto = (process.env.PAIRING_NUMBER || bot.owner.number || '').replace(/[^0-9]/g, '');
   let numero = porDefecto;
   if (process.stdin.isTTY) {
-    const respuesta = await askQuestion(chalk.bold.white(`   ┊ Número a vincular, sin + (Enter = ${porDefecto}): `));
+    const respuesta = await askQuestion(chalk.bold.white(`   ┊ TU número a vincular, con código de país y sin + (Enter = ${porDefecto}): `));
     if (respuesta) numero = respuesta.replace(/[^0-9]/g, '');
   }
   if (!numero) {
@@ -146,28 +153,34 @@ async function start(): Promise<void> {
   setMainSocket(sock);
   sock.ev.on('creds.update', saveCreds);
 
+  function solicitarCodigo(): void {
+    if (bot.auth !== 'code' || codeRequested || codeInFlight || state.creds.registered) return;
+    codeInFlight = true;
+    const numero = numeroVinculacion || bot.owner.number;
+    console.log(chalk.cyan('   ⏳ Pidiendo el código de 8 dígitos a WhatsApp…'));
+    void pedirCodigoVinculacion({
+      sock,
+      numero,
+      customCode: bot.pairingCode || undefined,
+      onCode: (code: string) => {
+        codeRequested = true;
+        console.log(`\n🔐 CÓDIGO DE VINCULACIÓN: ${code}\n   Número: +${numero}\n   WhatsApp → Ajustes → Dispositivos vinculados → Vincular con número de teléfono\n`);
+      },
+      onError: (mensaje: string) => {
+        console.error(`❌ No se pudo pedir el código de vinculación: ${mensaje}`);
+      },
+    }).finally(() => { codeInFlight = false; });
+  }
+
   sock.ev.on('connection.update', async (update: any) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr && bot.auth === 'qr' && !state.creds.registered) {
-      console.log('\n📲 Escanea este QR con WhatsApp → Dispositivos vinculados:\n');
-      qrcode.generate(qr, { small: true });
-    }
-
-    if (bot.auth === 'code' && connection === 'connecting' && !codeRequested && !state.creds.registered) {
-      codeRequested = true;
-      const numero = numeroVinculacion || bot.owner.number;
-      if (!numero) {
-        console.error('❌ AUTH_METHOD=code necesita OWNER_NUMBER o PAIRING_NUMBER en .env (número con código de país, sin +).');
+    if (qr && !state.creds.registered) {
+      if (bot.auth === 'qr') {
+        console.log('\n📲 Escanea este QR con WhatsApp → Dispositivos vinculados:\n');
+        qrcode.generate(qr, { small: true });
       } else {
-        try {
-          const code = bot.pairingCode
-            ? await sock.requestPairingCode(numero, bot.pairingCode)
-            : await sock.requestPairingCode(numero);
-          console.log(`\n🔐 CÓDIGO DE VINCULACIÓN: ${code}\n   Número: +${numero} · WhatsApp → Dispositivos vinculados → Vincular con número de teléfono\n`);
-        } catch (error: any) {
-          console.error('❌ No se pudo pedir el código de vinculación:', error?.message ?? error);
-        }
+        solicitarCodigo();
       }
     }
 
@@ -185,7 +198,7 @@ async function start(): Promise<void> {
       }
       console.log(`⚠️ Conexión cerrada (${reason}). Reconectando en 3s…`);
       if (!reconnectTimer) {
-        reconnectTimer = setTimeout(() => { reconnectTimer = null; codeRequested = false; start().catch(e => console.error('[RECONNECT]', e)); }, 3000);
+        reconnectTimer = setTimeout(() => { reconnectTimer = null; start().catch(e => console.error('[RECONNECT]', e)); }, 3000);
       }
     }
   });
@@ -216,10 +229,31 @@ async function start(): Promise<void> {
       }
     });
   }
+
+  if (bot.auth === 'code' && !state.creds.registered) {
+    setTimeout(solicitarCodigo, 10_000).unref?.();
+  }
+}
+
+function limpiarSesionIncompleta(): void {
+  if (bot.auth !== 'code') return;
+  try {
+    const credPath = path.join(sessionDir, 'creds.json');
+    if (!fs.existsSync(credPath)) return;
+    const creds = JSON.parse(fs.readFileSync(credPath, 'utf8'));
+    if (creds?.registered) return;
+    if (!creds?.me && !creds?.pairingCode) return;
+    fs.rmSync(sessionDir, { recursive: true, force: true });
+    fs.mkdirSync(sessionDir, { recursive: true });
+    console.log(chalk.yellow('   ♻️ Había una vinculación a medias: se limpió session/ para pedir un código nuevo.\n'));
+  } catch {
+    return;
+  }
 }
 
 async function main(): Promise<void> {
   await elegirVinculacion();
+  limpiarSesionIncompleta();
   const loaded = await loadCommands();
   banner();
   if (!loaded) {

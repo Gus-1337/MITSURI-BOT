@@ -27,6 +27,9 @@ if [ "$ES_TERMUX" -eq 1 ]; then
     warn "nodejs-lts no disponible, probando nodejs"
     pkg install -y nodejs git
   fi
+  if command -v termux-setup-storage >/dev/null 2>&1; then
+    termux-setup-storage || warn "Permiso de almacenamiento omitido"
+  fi
   if command -v termux-wake-lock >/dev/null 2>&1; then
     termux-wake-lock || true
     ok "Wake-lock activado (Android no dormirá el proceso)"
