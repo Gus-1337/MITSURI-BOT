@@ -1,0 +1,26 @@
+# Dependencias
+node_modules/
+
+# Sesiones y credenciales de WhatsApp (¡NUNCA subir!)
+session/
+sessions/
+auth_info/
+*.creds.json
+
+# Base de datos local y archivos generados
+database/
+*.log
+dist/
+.env
+.env.local
+
+# SO / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Temporales
+tmp/
+temp/
+*.tmp

@@ -1,0 +1,33 @@
+{
+  "name": "mitsuri-bot",
+  "version": "1.0.0",
+  "description": "🌸 MITSURI-MD — Bot de WhatsApp Multi-Device por categorías, con botones, APIs configurables y fácil de personalizar",
+  "type": "module",
+  "main": "index.ts",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "tsx index.ts",
+    "dev": "tsx watch index.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit false --outDir dist",
+    "start:build": "node dist/index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "git+https://github.com/Andresv27728/baileys-beta.git",
+    "axios": "^1.7.9",
+    "chalk": "^5.6.2",
+    "dotenv": "^16.4.7",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0",
+    "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.10",
+    "@types/qrcode-terminal": "^0.12.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  },
+  "license": "MIT"
+}
