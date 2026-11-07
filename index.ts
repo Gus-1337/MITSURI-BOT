@@ -9,6 +9,7 @@ import 'dotenv/config';
 import fs from 'node:fs';
 import https from 'node:https';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import readline from 'node:readline';
 import chalk from 'chalk';
 import P from 'pino';
@@ -23,15 +24,19 @@ import makeWASocket, {
 
 import { config, bot, apis } from './config.js';
 import { handleMessage, handleGroupParticipants, invalidateGroupCache } from './handler.js';
+import { adquirirLock, liberarLock } from './lib/instance.js';
 import { loadCommands, commandCount } from './lib/loader.js';
 import { pedirCodigoVinculacion } from './lib/pairing.js';
+import { registrarCierre, calcularEspera, hayTormenta } from './lib/reconnect.js';
 import { applySettings } from './lib/settings.js';
 import { setMainSocket } from './lib/runtime.js';
 import { restoreSubs, setSubMessageHandler, setSubWaVersion } from './lib/subbot.js';
 import { sleep } from './lib/utils.js';
 
 const logger = P({ level: process.env.LOG_LEVEL || 'silent' });
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const sessionDir = path.resolve(process.cwd(), bot.sessionDir);
+let archivoLock = '';
 const CODE_TTL_MS = Math.max(5_000, Number(process.env.PAIRING_TTL_MS) || 120_000);
 const TTL_TEXTO = CODE_TTL_MS >= 60_000
   ? `${Math.round(CODE_TTL_MS / 60_000)} minuto${Math.round(CODE_TTL_MS / 60_000) === 1 ? '' : 's'}`
@@ -53,6 +58,7 @@ let reiniciando = false;
 let pairSuccess = false;
 let activeSock: any = null;
 let numeroVinculacion = '';
+const cierres: number[] = [];
 
 function normalizePhone(input: any): string {
   let s = String(input ?? '').replace(/\D/g, '');
@@ -204,12 +210,38 @@ async function elegirVinculacion(): Promise<void> {
   console.log(chalk.cyan(`   📞 Se vinculará +${numero}\n`));
 }
 
+/** Cierra y desactiva el socket anterior antes de crear otro (evita dos sockets vivos). */
+function cerrarSocketAnterior(): void {
+  if (!activeSock) return;
+  try { activeSock.ev?.removeAllListeners?.('connection.update'); } catch { /*noop*/ }
+  try { activeSock.ev?.removeAllListeners?.('creds.update'); } catch { /*noop*/ }
+  try { activeSock.ws?.close?.(); } catch { /*noop*/ }
+  activeSock = null;
+}
+
+/** Reconexión con backoff: si llueven cierres, avisa de la causa más común. */
+function programarReconexion(base: number, nuevaSesion: boolean): void {
+  if (reconnectTimer) return;
+  const n = registrarCierre(cierres);
+  const espera = calcularEspera(base, n);
+  if (hayTormenta(n)) {
+    console.log(chalk.red(`\n⚠️ ${n} desconexiones en 1 minuto: casi siempre es OTRO bot usando la misma sesión.`));
+    console.log(chalk.red('   Termux: pkill -f "tsx index.ts"   ·   PM2: pm2 delete mitsuri'));
+    console.log(chalk.red('   y si sigue: rm -rf session && npm start\n'));
+  }
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    cerrarSocketAnterior();
+    start(nuevaSesion).catch(e => console.error('[RECONNECT]', e));
+  }, espera);
+}
+
 function reiniciarVinculacion(motivo: string, ms = 2000): void {
   if (reiniciando || connected || bot.auth !== 'code') return;
   reiniciando = true;
   console.log(chalk.yellow(`\n${motivo}\n`));
   if (pairTimer) { clearTimeout(pairTimer); pairTimer = null; }
-  try { activeSock?.end?.(new Error('reiniciar vinculación')); } catch { /* ya cerrado */ }
+  cerrarSocketAnterior();
   limpiarSesion();
   codeRequested = false;
   codeInFlight = false;
@@ -315,6 +347,7 @@ async function start(nuevaSesion = false): Promise<void> {
 
     if (connection === 'open') {
       connected = true;
+      cierres.length = 0;
       if (pairTimer) { clearTimeout(pairTimer); pairTimer = null; }
       console.log(`✅ ${bot.name} conectado como ${sock.user?.id ?? 'desconocido'}`);
       console.log(`   Escribe ${bot.prefix}menu en cualquier chat para empezar.\n`);
@@ -324,22 +357,30 @@ async function start(nuevaSesion = false): Promise<void> {
       if (reiniciando) return;
       connected = false;
       const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
-      const isStreamError = String((lastDisconnect?.error as any)?.message ?? '').includes('Stream Errored');
+      const mensaje = String((lastDisconnect?.error as any)?.message ?? '');
+      const isStreamError = mensaje.includes('Stream Errored');
 
-      if (statusCode === 515 || isStreamError) {
-        console.log(chalk.yellow('[ RECONNECT ] Reiniciando socket por actualización de sesión...'));
-        if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; start(false).catch(e => console.error('[RECONNECT]', e)); }, 2000);
-      } else if (statusCode === DisconnectReason.loggedOut) {
+      if (statusCode === DisconnectReason.loggedOut) {
         if (bot.auth === 'code' && !state.creds.registered && !pairSuccess) {
           reiniciarVinculacion('♻️  WhatsApp cerró la vinculación a medias. Limpiando sesión y pidiendo un código nuevo…');
           return;
         }
         console.log(chalk.red('[ SESSION ] Sesión cerrada desde el teléfono. Limpiando...'));
         limpiarSesion();
-        if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; start(true).catch(e => console.error('[RECONNECT]', e)); }, 2000);
+        programarReconexion(2000, true);
+      } else if (statusCode === 440) {
+        console.log(chalk.red('🚫 Otra conexión reemplazó esta sesión (440). ¿Quedó otro bot abierto?'));
+        programarReconexion(20_000, false);
+      } else if (statusCode === 500 || statusCode === 411 || statusCode === 403) {
+        console.log(chalk.red(`♻️ Sesión inválida (${statusCode}). Se limpia y se vuelve a vincular.`));
+        limpiarSesion();
+        programarReconexion(3000, true);
+      } else if (statusCode === 515 || isStreamError) {
+        console.log(chalk.yellow('[ RECONNECT ] Reiniciando socket por actualización de sesión...'));
+        programarReconexion(2000, false);
       } else {
-        console.log(chalk.yellow(`⚠️ Conexión cerrada (${statusCode ?? 'desconocido'}). Reconectando en 3s…`));
-        if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; start(false).catch(e => console.error('[RECONNECT]', e)); }, 3000);
+        console.log(chalk.yellow(`⚠️ Conexión cerrada (${statusCode ?? 'desconocido'}: ${mensaje || 'sin detalle'}). Reconectando…`));
+        programarReconexion(3000, false);
       }
     }
   });
@@ -376,6 +417,20 @@ async function start(nuevaSesion = false): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const lock = adquirirLock(sessionDir, ROOT);
+  if (!lock.ok) {
+    console.error(chalk.red(`\n🚫 YA HAY OTRO ${bot.name} CORRIENDO (PID ${lock.pid}) con la misma sesión.`));
+    console.error(chalk.red('   WhatsApp cierra una de las dos conexiones con 428 y entra en bucle de reconexión.'));
+    console.error(chalk.red('   Termux : pkill -f "tsx index.ts"'));
+    console.error(chalk.red('   PM2    : pm2 delete mitsuri'));
+    console.error(chalk.red('   Luego  : cd ~/MITSURI-BOT && npm start'));
+    console.error(chalk.red('   (Solo si querés dos procesos a propósito: MITSURI_ALLOW_MULTI=1 con SESSION_DIR distintos)\n'));
+    process.exit(1);
+  }
+  archivoLock = lock.file;
+  process.on('exit', () => liberarLock(archivoLock));
+  console.log(chalk.gray(`   🔒 Instancia única OK · PID ${process.pid}\n`));
+
   try {
     const r = await fetchLatestBaileysVersion();
     waVersion = r.version;
@@ -403,7 +458,9 @@ main().catch(error => {
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, async () => {
     console.log(`\n👋 Cerrando ${bot.name}…`);
+    liberarLock(archivoLock);
     await sleep(150);
     process.exit(0);
   });
 }
+

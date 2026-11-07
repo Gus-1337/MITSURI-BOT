@@ -59,6 +59,26 @@ Hace `git pull` + `npm install` + `rm -rf session` + `npm start`. **Usalo siempr
 
 Solo avisa de reiniciar cuando se tocó el motor (`lib/`, `index.ts`, `handler.ts`), porque esos módulos ya están cargados en memoria. El `config.ts` se recarga solo por su watcher. No borra `session/` ni reinicia el proceso.
 
+### 🔒 Una sola instancia (evita el bucle 428 / 515)
+
+Si dejás un `npm start` corriendo en una sesión de Termux y abrís otro (o además usás PM2), los dos procesos comparten `session/`. WhatsApp cierra uno con **`428 Connection Closed`**, manda **`515 restart required`** al otro, ambos reconectan… y ves «✅ conectado» + `[ RECONNECT ]` sin parar, aunque el bot parezca andar. No es un error del bot ni de la red.
+
+El bot ahora crea un lock (`.mitsuri-<hash>.lock`) al arrancar: si ya hay otro proceso vivo con esa sesión, **el segundo no arranca** y te dice el PID. Al salir (Ctrl+C, SIGTERM, crash) el lock se libera solo.
+
+```bash
+# Ver si quedó algo colgado
+ps aux | grep -E 'tsx|mitsuri' | grep -v grep
+
+# Termux: matar el viejo y arrancar limpio
+pkill -f "tsx index.ts"
+cd ~/MITSURI-BOT && rm -rf session && npm start
+
+# Si usás PM2
+pm2 delete mitsuri && cd ~/MITSURI-BOT && npm start
+```
+
+Además: `440` (otra conexión reemplazó la sesión) espera 20 s, `500`/`411`/`403` limpian la sesión y revinculan, y si hay **4 o más cierres por minuto** el bot frena con backoff de 10–30 s y te imprime estos comandos en la consola. Para shardear a propósito: `MITSURI_ALLOW_MULTI=1` con `SESSION_DIR` distintos por proceso.
+
 ---
 
 ### 🔗 Instalaciónes Básicas
@@ -178,7 +198,8 @@ cd && cd MITSURI-BOT && rm -rf session && npm start
 
 | Síntoma | Arreglo |
 |---|---|
-| No aparece el código / `Connection Closed` / «Sesión cerrada desde el teléfono» | Copia vieja: `cd ~/MITSURI-BOT && bash update.sh`. Elegí `2`, poné tu número y esperá 5–10 s. Sin VPN ni proxy. |
+| `428 Precondition Required / Connection Closed` + `[ RECONNECT ]` en bucle, «conectado» una y otra vez | **Dos procesos con la misma `session/`**. Matá el viejo: `pkill -f "tsx index.ts"` (o `pm2 delete mitsuri`), y si sigue `rm -rf session && npm start`. El bot ahora **bloquea la 2ª instancia** con un lock y avisa el PID. Ver la sección «🔒 Una sola instancia». |
+| No aparece el código / «Sesión cerrada desde el teléfono» | Copia vieja: `cd ~/MITSURI-BOT && bash update.sh`. Elegí `2`, poné tu número y esperá 5–10 s. Sin VPN ni proxy. |
 | El código venció | Dura 2 minutos; el bot muestra uno nuevo solo. No hace que lo hagas a mano. `PAIRING_TTL_MS` en `.env` lo cambia. |
 | `405` al conectar | Versión vieja de WA Web o red bloqueada. Corré `bash update.sh`; el banner debe mostrar `🆕 WA Web : 2.3000.1043857760`. Si dice «se usa la del fork», probá otra WiFi/datos y desactivá VPN. |
 | `Could not load the "sharp" module using the android-arm64 runtime` | `npm install --force --no-save @img/sharp-wasm32` o `bash install-termux.sh`. El bot arranca igual; solo `.sticker` y `.toimg` avisan. |
@@ -385,6 +406,6 @@ Cada sub-bot es **un socket de Baileys más dentro del mismo proceso** (no un pr
 
 ## Verificado
 
-`npm run typecheck` · `npm run build` · arranque con 85 comandos y 9 APIs · 43 endpoints · 19 categorías · `.fix` probado contra un remoto git real (pull, respaldo, stash y recarga en caliente) · menú limpio verificado en `list`/`buttons`/`text` · botones/listas · hot-reload · menú de vinculación QR/código · `fetchLatestBaileysVersion()` → `2.3000.1043857760` · socket con `makeCacheableSignalKeyStore` + `Browsers.macOS('Safari')` · sesión limpia antes de vincular · código de 8 dígitos impreso con socket real (formato `XXXX-XXXX`) y probado con `lib/pairing.ts` · TTL de 2 minutos con regeneración · reconexión `515`/`401` · sub-bots con la misma versión y código verificado + `MAX_SUBBOTS` · medición de RSS por socket · `update.sh` · `install-termux.sh` · `sharp` probado con solo WASM · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
+`npm run typecheck` · `npm run build` · arranque con 85 comandos y 9 APIs · lock de instancia única (2º proceso bloqueado) · backoff de reconexión verificado · 43 endpoints · 19 categorías · `.fix` probado contra un remoto git real (pull, respaldo, stash y recarga en caliente) · menú limpio verificado en `list`/`buttons`/`text` · botones/listas · hot-reload · menú de vinculación QR/código · `fetchLatestBaileysVersion()` → `2.3000.1043857760` · socket con `makeCacheableSignalKeyStore` + `Browsers.macOS('Safari')` · sesión limpia antes de vincular · código de 8 dígitos impreso con socket real (formato `XXXX-XXXX`) y probado con `lib/pairing.ts` · TTL de 2 minutos con regeneración · reconexión `515`/`401` · sub-bots con la misma versión y código verificado + `MAX_SUBBOTS` · medición de RSS por socket · `update.sh` · `install-termux.sh` · `sharp` probado con solo WASM · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
 
 MIT 🌸
