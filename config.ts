@@ -42,8 +42,8 @@ export const config = {
   devName: process.env.OWNER_NAME || 'GUS',
   prefix: process.env.BOT_PREFIX || '.',
   owner: ownerNumbers,
-  banner: 'https://cdn.dix.lat/me/q2se_20261008-r2x1-0f9o-f489.jpg',
-  icon: 'https://cdn.dix.lat/me/q2se_20261008-r2x1-0f9o-f489.jpg',
+  banner: 'https://d0mwa043ankuvadx.public.blob.vercel-storage.com/nyx/oSDc1z4.jpeg',
+  icon: 'https://d0mwa043ankuvadx.public.blob.vercel-storage.com/nyx/oSDc1z4.jpeg',
   coin: 'coins',
 
   api: {
