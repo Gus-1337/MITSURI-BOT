@@ -14,7 +14,7 @@
 
 ```
 MITSURI-BOT/
-├── commands/            # 84 comandos en 14 carpetas
+├── commands/            # 85 comandos en 14 carpetas
 │   ├── admin/  anime/  download/  economy/  fun/  ia/  logomaker/
 │   ├── main/   nsfw/   owner/     perfil/   stickers/  subbot/  tools/
 ├── lib/                 # motor
@@ -47,6 +47,17 @@ cd ~/MITSURI-BOT && bash update.sh
 ```
 
 Hace `git pull` + `npm install` + `rm -rf session` + `npm start`. **Usalo siempre que el bot no muestre el código**: evita quedarte con una copia vieja o una sesión a medias. También como `npm run update`.
+
+**Desde el propio WhatsApp** (dueño): `.fix`, `.pull`, `.update` o `.actualizar`. Actualiza **sin reiniciar**:
+
+1. `git fetch --prune --tags --force origin` (sirve aunque el historial remoto se haya reescrito).
+2. Busca `origin/<rama>`, `origin/main` u `origin/master`.
+3. Si tenés commits locales que no están en el remoto, los guarda en `backup-local-<fecha>`.
+4. Hace `stash` solo de archivos **rastreados** (sesiones, `.env` y `database/` no se tocan), `git reset --hard` al remoto y `stash pop`.
+5. Si cambió `package.json`, corre `npm install` solo.
+6. Llama a `loadCommands()` + `syncConfig()`: los **85 comandos se recargan en caliente** y responde con el listado de archivos cambiados.
+
+Solo avisa de reiniciar cuando se tocó el motor (`lib/`, `index.ts`, `handler.ts`), porque esos módulos ya están cargados en memoria. El `config.ts` se recarga solo por su watcher. No borra `session/` ni reinicia el proceso.
 
 ---
 
@@ -321,7 +332,7 @@ Cada comando llama a un nombre lógico (`ctx.api('download.ytmp3', { url })`). L
 
 ## Comandos
 
-84 comandos en 14 carpetas: descargas, IA, anime, stickers, logomaker, economía, perfil, grupos, dueño, sub-bots, herramientas, diversión, main y NSFW (bloqueado por defecto; `.checknsfw` es moderación de imágenes).
+85 comandos en 14 carpetas: descargas, IA, anime, stickers, logomaker, economía, perfil, grupos, dueño, sub-bots, herramientas, diversión, main y NSFW (bloqueado por defecto; `.checknsfw` es moderación de imágenes).
 
 ```ts
 import { apiCommand } from '../../lib/cmd.js';
@@ -340,7 +351,7 @@ Multi-Device real (sesión en `session/`, QR o pairing code, reconexión), sub-b
 
 ## 🤖 Sub-bots: ¿cuántos aguanta?
 
-Cada sub-bot es **un socket de Baileys más dentro del mismo proceso** (no un proceso nuevo): comparte los 84 comandos, `sharp`, el handler y la versión de WA Web. Medido aquí, un socket adicional en reposo suma solo **~2 MB de RSS** porque las librerías ya están cargadas; con sesión real, claves Signal, cachés y tráfico, lo realista es **15–40 MB por sub-bot** y picos de 100+ MB cuando procesa stickers/descargas con `sharp`.
+Cada sub-bot es **un socket de Baileys más dentro del mismo proceso** (no un proceso nuevo): comparte los 85 comandos, `sharp`, el handler y la versión de WA Web. Medido aquí, un socket adicional en reposo suma solo **~2 MB de RSS** porque las librerías ya están cargadas; con sesión real, claves Signal, cachés y tráfico, lo realista es **15–40 MB por sub-bot** y picos de 100+ MB cuando procesa stickers/descargas con `sharp`.
 
 | Recurso | Lo que limita de verdad |
 |---|---|
@@ -374,6 +385,6 @@ Cada sub-bot es **un socket de Baileys más dentro del mismo proceso** (no un pr
 
 ## Verificado
 
-`npm run typecheck` · `npm run build` · arranque con 84 comandos y 9 APIs · 43 endpoints · 19 categorías · menú limpio verificado en `list`/`buttons`/`text` · botones/listas · hot-reload · menú de vinculación QR/código · `fetchLatestBaileysVersion()` → `2.3000.1043857760` · socket con `makeCacheableSignalKeyStore` + `Browsers.macOS('Safari')` · sesión limpia antes de vincular · código de 8 dígitos impreso con socket real (formato `XXXX-XXXX`) y probado con `lib/pairing.ts` · TTL de 2 minutos con regeneración · reconexión `515`/`401` · sub-bots con la misma versión y código verificado + `MAX_SUBBOTS` · medición de RSS por socket · `update.sh` · `install-termux.sh` · `sharp` probado con solo WASM · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
+`npm run typecheck` · `npm run build` · arranque con 85 comandos y 9 APIs · 43 endpoints · 19 categorías · `.fix` probado contra un remoto git real (pull, respaldo, stash y recarga en caliente) · menú limpio verificado en `list`/`buttons`/`text` · botones/listas · hot-reload · menú de vinculación QR/código · `fetchLatestBaileysVersion()` → `2.3000.1043857760` · socket con `makeCacheableSignalKeyStore` + `Browsers.macOS('Safari')` · sesión limpia antes de vincular · código de 8 dígitos impreso con socket real (formato `XXXX-XXXX`) y probado con `lib/pairing.ts` · TTL de 2 minutos con regeneración · reconexión `515`/`401` · sub-bots con la misma versión y código verificado + `MAX_SUBBOTS` · medición de RSS por socket · `update.sh` · `install-termux.sh` · `sharp` probado con solo WASM · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
 
 MIT 🌸
