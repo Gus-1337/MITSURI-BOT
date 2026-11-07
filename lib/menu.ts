@@ -3,11 +3,11 @@
  * Lee las categorías (nombre, emoji, banner y link) desde config.ts y los
  * comandos desde el registro cargado por lib/loader.ts.
  */
-import { bot, categories, menu, theme, apis } from '../config.js';
+import { bot, categories, menu, theme } from '../config.js';
 import { sendButtons, sendList } from './buttons.js';
 import { getCommandsByCategory, allCommands } from './loader.js';
-import { getStats, getPrefixes } from './db.js';
-import { formatUptime, truncate } from './utils.js';
+import { getPrefixes } from './db.js';
+import { truncate } from './utils.js';
 import type { Message, Socket, Command } from './types.js';
 import type { CategoryConfig } from './config-types.js';
 
@@ -33,37 +33,32 @@ export function resolveCategory(input: string): string | null {
   )?.id ?? null;
 }
 
-function header(): string {
-  const stats = getStats();
-  const apisOn = Object.values(apis).filter(a => a.enabled).map(a => a.label).join(' · ');
-  const prefixes = getPrefixes().join(' ');
+/** Encabezado limpio: sin estadísticas ni listas de relleno. */
+export function header(): string {
   return [
     theme.menuTitle,
     `│ ${theme.menuSubtitle}`,
     '│',
     `│ 👑 Dueño: *${bot.owner.name}*${bot.owner.number ? ` (+${bot.owner.number})` : ''}`,
-    `│ 🔣 Prefijos: ${prefixes}`,
-    `│ ⏱️ Activo: ${formatUptime(process.uptime() * 1000)}`,
-    `│ 📦 Comandos: ${allCommands().filter(c => !c.hidden).length} en ${enabledCategories().length} categorías`,
-    `│ 💬 Msgs procesados: ${stats.messages}`,
-    `│ 🔌 APIs: ${apisOn}`,
+    `│ 🔣 Prefijos: ${getPrefixes().join(' ')}`,
     '╰───────────────╯',
   ].join('\n');
 }
 
+/** Texto completo SOLO para el modo `text` (sin botones, necesita la lista para navegar). */
 export function mainMenuText(page = 1, perPage = 7): string {
   const cats = enabledCategories();
   const pages = Math.max(1, Math.ceil(cats.length / perPage));
   const p = Math.min(Math.max(1, page), pages);
   const slice = cats.slice((p - 1) * perPage, p * perPage);
-  const list = slice.map(c => `│ ${c.emoji} *${c.name}* · \`${bot.prefix}menu ${c.id}\`\n│    ${c.description}`).join('\n');
+  const list = slice.map(c => `│ ${c.emoji} *${c.name}* · \`${bot.prefix}menu ${c.id}\``).join('\n');
   return [
     header(),
     '',
     `📂 *CATEGORÍAS*  (${p}/${pages})`,
     list,
     '',
-    `_Ejemplo: \`${bot.prefix}menu anime\` · \`${bot.prefix}play <url>\` · \`${bot.prefix}help play\`_`,
+    `_Ejemplo: \`${bot.prefix}menu anime\`_`,
   ].join('\n');
 }
 
@@ -73,11 +68,12 @@ export async function sendMainMenu(sock: Socket, jid: string, opts: MenuOptions 
   const main = categories.main;
   const page = Math.max(1, opts.page ?? 1);
   const q = { quoted: opts.quoted };
-  const text = mainMenuText(page, menu.style === 'buttons' ? menu.buttonsPerPage : 7);
 
   if (menu.style === 'text') {
-    return sock.sendMessage(jid, { text: truncate(text, 4000) }, q);
+    return sock.sendMessage(jid, { text: truncate(mainMenuText(page), 4000) }, q);
   }
+
+  const text = header();
 
   if (menu.style === 'buttons') {
     const perPage = menu.buttonsPerPage;
@@ -90,7 +86,7 @@ export async function sendMainMenu(sock: Socket, jid: string, opts: MenuOptions 
     if (p > 1) buttons.push({ label: menu.prevLabel, id: `${bot.prefix}menu ${p - 1}` });
     if (p < pages) buttons.push({ label: menu.nextLabel, id: `${bot.prefix}menu ${p + 1}` });
     return sendButtons(sock, jid, {
-      text: mainMenuText(p, perPage), buttons,
+      text, buttons,
       image: menu.showBanner ? main.banner : undefined,
       footer: theme.footer,
       link: { label: main.linkLabel, url: main.link },

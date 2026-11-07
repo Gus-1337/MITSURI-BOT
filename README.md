@@ -315,6 +315,8 @@ Cada comando llama a un nombre lógico (`ctx.api('download.ytmp3', { url })`). L
 
 `.menu` abre una lista `single_select`; `.menu <categoría>` muestra el banner, botones de comandos, paginación, «⬅️ Menú principal» y el botón URL. Los IDs son comandos completos (`.menu anime 2`). Si WhatsApp rechaza el interactivo, degrada a texto numerado. `menuStyle` acepta `list`, `buttons`, `text`.
 
+**Menú limpio**: el texto del menú principal es solo encabezado (nombre, frase, dueño, prefijos). Ya no lleva `Activo`, `Comandos`, `Msgs procesados`, `APIs` ni la lista repetida de `CATEGORÍAS (1/3)`: las categorías van en la lista desplegable / botones, y las estadísticas siguen disponibles en `.infobot`. Con `MENU_STYLE=text` sí se imprime la lista de categorías, porque sin botones es la única forma de navegar.
+
 ---
 
 ## Comandos
@@ -372,6 +374,6 @@ Cada sub-bot es **un socket de Baileys más dentro del mismo proceso** (no un pr
 
 ## Verificado
 
-`npm run typecheck` · `npm run build` · arranque con 84 comandos y 9 APIs · 43 endpoints · 19 categorías · botones/listas · hot-reload · menú de vinculación QR/código · `fetchLatestBaileysVersion()` → `2.3000.1043857760` · socket con `makeCacheableSignalKeyStore` + `Browsers.macOS('Safari')` · sesión limpia antes de vincular · código de 8 dígitos impreso con socket real (formato `XXXX-XXXX`) y probado con `lib/pairing.ts` · TTL de 2 minutos con regeneración · reconexión `515`/`401` · sub-bots con la misma versión y código verificado + `MAX_SUBBOTS` · medición de RSS por socket · `update.sh` · `install-termux.sh` · `sharp` probado con solo WASM · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
+`npm run typecheck` · `npm run build` · arranque con 84 comandos y 9 APIs · 43 endpoints · 19 categorías · menú limpio verificado en `list`/`buttons`/`text` · botones/listas · hot-reload · menú de vinculación QR/código · `fetchLatestBaileysVersion()` → `2.3000.1043857760` · socket con `makeCacheableSignalKeyStore` + `Browsers.macOS('Safari')` · sesión limpia antes de vincular · código de 8 dígitos impreso con socket real (formato `XXXX-XXXX`) y probado con `lib/pairing.ts` · TTL de 2 minutos con regeneración · reconexión `515`/`401` · sub-bots con la misma versión y código verificado + `MAX_SUBBOTS` · medición de RSS por socket · `update.sh` · `install-termux.sh` · `sharp` probado con solo WASM · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
 
 MIT 🌸
