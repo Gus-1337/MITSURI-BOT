@@ -336,6 +336,31 @@ Multi-Device real (sesión en `session/`, QR o pairing code, reconexión), sub-b
 
 ---
 
+## 🤖 Sub-bots: ¿cuántos aguanta?
+
+Cada sub-bot es **un socket de Baileys más dentro del mismo proceso** (no un proceso nuevo): comparte los 84 comandos, `sharp`, el handler y la versión de WA Web. Medido aquí, un socket adicional en reposo suma solo **~2 MB de RSS** porque las librerías ya están cargadas; con sesión real, claves Signal, cachés y tráfico, lo realista es **15–40 MB por sub-bot** y picos de 100+ MB cuando procesa stickers/descargas con `sharp`.
+
+| Recurso | Lo que limita de verdad |
+|---|---|
+| RAM 125 GB (34 GB libres) | No es el cuello: 34 GB / 30 MB ≈ 1000 sub-bots. Sobra. |
+| CPU 16 núcleos con load 11 | **Sí es el cuello.** Quedan ~5 núcleos; un solo event loop de Node atiende a todos. |
+| Heap de V8 (~4 GB por proceso en Node 23) | ~3–10 MB de objetos JS por socket → GC se vuelve pesado mucho antes de los 4 GB. |
+| WhatsApp / IP | Muchos dispositivos vinculados desde la misma IP de Azure levantan rate-limit o baneo. |
+| Disco y fd | `sessions/sub/<numero>/` ≈ 1–3 MB y 1 socket TCP por sub-bot. Irrelevante. |
+
+**Recomendación**
+
+| Escenario | Sub-bots |
+|---|---|
+| Seguro, un solo proceso, uso ligero | **20–40** (por eso `MAX_SUBBOTS=40` por defecto) |
+| Uso intenso (stickers, descargas, IA en cada sub-bot) | **10–15** |
+| Repartiendo en 4–8 procesos con PM2 y `MAX_SUBBOTS` por proceso | **100–150** |
+| Techo teórico por RAM | ~1000, pero no lo intentes: CPU y WhatsApp caen antes |
+
+`.subbots` muestra `activos/límite`, RSS y heap para vigilarlo. Para subir el tope: `MAX_SUBBOTS=80` en `.env`. Si necesitás más de ~50, shardeá: varios procesos con `SESSION_DIR` y `DB_DIR` distintos, o un PM2 con `--max-old-space-size=2048`. Los sub-bots usan la misma `fetchLatestBaileysVersion()` y el mismo flujo de código de 8 dígitos que el bot principal (antes daban `405` y *Connection Closed*).
+
+---
+
 ## Seguridad
 
 - **Revoca/rota el token de GitHub compartido en el chat.** Se usó solo como header temporal para el push, no quedó guardado en `.git/config` ni en ningún archivo; al haber estado en texto plano, dálo por comprometido.
@@ -347,6 +372,6 @@ Multi-Device real (sesión en `session/`, QR o pairing code, reconexión), sub-b
 
 ## Verificado
 
-`npm run typecheck` · `npm run build` · arranque con 84 comandos y 9 APIs · 43 endpoints · 19 categorías · botones/listas · hot-reload · menú de vinculación QR/código · `fetchLatestBaileysVersion()` → `2.3000.1043857760` · socket con `makeCacheableSignalKeyStore` + `Browsers.macOS('Safari')` · sesión limpia antes de vincular · código de 8 dígitos impreso con socket real (formato `XXXX-XXXX`) y probado con `lib/pairing.ts` · TTL de 2 minutos con regeneración · reconexión `515`/`401` · `update.sh` · `install-termux.sh` · `sharp` probado con solo WASM · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
+`npm run typecheck` · `npm run build` · arranque con 84 comandos y 9 APIs · 43 endpoints · 19 categorías · botones/listas · hot-reload · menú de vinculación QR/código · `fetchLatestBaileysVersion()` → `2.3000.1043857760` · socket con `makeCacheableSignalKeyStore` + `Browsers.macOS('Safari')` · sesión limpia antes de vincular · código de 8 dígitos impreso con socket real (formato `XXXX-XXXX`) y probado con `lib/pairing.ts` · TTL de 2 minutos con regeneración · reconexión `515`/`401` · sub-bots con la misma versión y código verificado + `MAX_SUBBOTS` · medición de RSS por socket · `update.sh` · `install-termux.sh` · `sharp` probado con solo WASM · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
 
 MIT 🌸

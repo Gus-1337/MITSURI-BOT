@@ -27,7 +27,7 @@ import { loadCommands, commandCount } from './lib/loader.js';
 import { pedirCodigoVinculacion } from './lib/pairing.js';
 import { applySettings } from './lib/settings.js';
 import { setMainSocket } from './lib/runtime.js';
-import { restoreSubs, setSubMessageHandler } from './lib/subbot.js';
+import { restoreSubs, setSubMessageHandler, setSubWaVersion } from './lib/subbot.js';
 import { sleep } from './lib/utils.js';
 
 const logger = P({ level: process.env.LOG_LEVEL || 'silent' });
@@ -390,6 +390,7 @@ async function main(): Promise<void> {
   if (!loaded) console.warn('⚠️ No se cargó ningún comando. Revisa la carpeta commands/.');
   applySettings();
   setSubMessageHandler((sock, msg) => { void handleMessage(sock, msg, { isSubbot: true }); });
+  setSubWaVersion(waVersion);
   await restoreSubs().catch(e => console.error('[SUBBOT] restore:', e));
   await start(true);
 }
