@@ -8,12 +8,12 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "start": "tsx index.ts",
+    "start": "tsx bot.ts",
     "start:panel": "node main.cjs",
-    "dev": "tsx watch index.ts",
+    "dev": "tsx watch bot.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit false --outDir dist",
-    "start:build": "node dist/index.js",
+    "start:build": "node dist/bot.js",
     "install:termux": "bash install-termux.sh",
     "update": "bash update.sh"
   },

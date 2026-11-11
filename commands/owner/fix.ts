@@ -135,9 +135,9 @@ const command: Command = {
         : '';
 
       // Si tocó el motor, los comandos recargados no bastan para esos archivos
-      const tocaMotor = diff.some(([, rutas]) => /(^|[\s,]+)(lib\/|index\.ts|handler\.ts|tsconfig\.json)/.test(rutas));
+      const tocaMotor = diff.some(([, rutas]) => /(^|[\s,]+)(lib\/|bot\.ts|index\.ts|handler\.ts|tsconfig\.json)/.test(rutas));
       const avisoMotor = tocaMotor
-        ? '\n› ⚠️ Se actualizó el motor (lib/ / index.ts): reinicia cuando puedas para aplicarlo'
+        ? '\n› ⚠️ Se actualizó el motor (lib/ / bot.ts): reinicia cuando puedas para aplicarlo'
         : '\n› Comandos recargados sin reiniciar el bot';
       const avisoPocos = n < 80 ? '\n› ⚠️ Cargaron menos comandos de lo normal: revisa el loader' : '';
       const avisoDeps = instaloDeps ? '\n› Dependencias actualizadas con npm install' : '';

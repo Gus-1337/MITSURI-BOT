@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 /**
- * MITSURI-MD · entrada universal para paneles (HidenCloud / Pterodactyl)
+ * MITSURI-MD · entrada CommonJS para paneles (HidenCloud / Pterodactyl)
  *
  * Muchos panels con "egg Node.js (TypeScript)" arrancan así:
- *   /usr/local/bin/ts-node /home/container/${MAIN_FILE}
+ *   /usr/local/bin/ts-node --esm /home/container/${MAIN_FILE}
  *
- * ts-node (y el soporte nativo de .ts de Node 23) NO reescribe los imports
- * './config.js' -> './config.ts', que es lo que exige ESM + NodeNext.
- * Por eso sale: ERR_MODULE_NOT_FOUND: Cannot find module '/home/container/config.js'.
+ * Con Node 23 eso usa el "type stripping" nativo, que NO reescribe los imports
+ * './config.js' -> './config.ts': el bot moría con
+ * ERR_MODULE_NOT_FOUND: Cannot find module '/home/container/config.js'.
  *
- * Este archivo es JavaScript CommonJS puro: cualquier lanzador lo ejecuta
- * (node, ts-node, PM2, el panel) y él arranca el bot con tsx, que sí resuelve
- * los .ts. Es el mismo comando que `npm start`, así que el comportamiento
- * (código de vinculación, lock de instancia, recarga de comandos) es idéntico.
+ * Este archivo es JavaScript CommonJS puro, sin imports relativos a .ts:
+ * cualquier lanzador lo ejecuta (node, ts-node, PM2, el panel) y él arranca
+ * el bot real (bot.ts) con tsx, que sí resuelve los .ts. Es el mismo comando
+ * que `npm start`.
  */
 
 const { spawn } = require('node:child_process');
@@ -20,7 +20,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = __dirname;
-const entry = path.join(root, 'index.ts');
+const entry = path.join(root, 'bot.ts');
 
 let cli;
 try {
@@ -30,7 +30,7 @@ try {
 }
 
 if (!fs.existsSync(cli) || !fs.existsSync(entry)) {
-  console.error('\n  ✖ MITSURI-MD: no encuentro tsx o index.ts.');
+  console.error('\n  ✖ MITSURI-MD: no encuentro tsx o bot.ts.');
   console.error('    Entrá a la carpeta del bot y ejecutá:  npm install\n');
   console.error('    En el panel: MAIN_FILE=main.cjs  ·  AUTO_UPDATE=1\n');
   process.exit(1);
@@ -40,7 +40,7 @@ console.log('🌸 MITSURI-MD · arrancando con tsx (entrada compatible con el pa
 
 let apagando = false;
 
-const child = spawn(process.execPath, [cli, 'index.ts'], {
+const child = spawn(process.execPath, [cli, 'bot.ts'], {
   cwd: root,
   stdio: 'inherit',
   env: { ...process.env, MITSURI_LAUNCHER: '1' },

@@ -21,7 +21,7 @@ function procesoVivo(pid: number): boolean {
   try { process.kill(pid, 0); } catch { return false; }
   try {
     const cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ');
-    return /index\.ts|tsx|mitsuri/i.test(cmd);
+    return /bot\.ts|index\.ts|tsx|mitsuri/i.test(cmd);
   } catch {
     return true; // sin /proc (Windows), confiar en kill(pid, 0)
   }

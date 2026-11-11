@@ -27,8 +27,9 @@ MITSURI-BOT/
 │   ├── pairing.ts       # código de 8 dígitos esperando a que el socket esté listo
 │   ├── runtime.ts  settings.ts  sharp.ts  subbot.ts  types.ts  utils.ts
 ├── config.ts            # globals + config + banners + links + endpoints + categorías
-├── handler.ts  index.ts
-├── main.cjs  main.js    # entrada para paneles (HidenCloud / Pterodactyl)
+├── bot.ts               # el bot: conexión, vinculación, lock, comandos
+├── handler.ts  index.ts  # index.ts = entrada mínima para el panel
+├── main.cjs  main.js    # entradas alternativas JS para paneles / PM2
 ├── install-termux.sh    # instalador de un toque para Android
 ├── update.sh            # git pull + npm install + sesión limpia + arrancar
 └── package.json  tsconfig.json  .env.example  .gitignore
@@ -39,7 +40,7 @@ npm install
 npm start
 ```
 
-Node.js ≥ 20. El fork trae una versión vieja de WA Web (`2.3000.1035194821`) que hace que WhatsApp rechace el WebSocket con `405`; `index.ts` consulta `fetchLatestBaileysVersion()` y usa la vigente (`2.3000.1043857760`). Si aun así ves `405`, es bloqueo de red (VPN/proxy/sandbox).
+Node.js ≥ 20. El fork trae una versión vieja de WA Web (`2.3000.1035194821`) que hace que WhatsApp rechace el WebSocket con `405`; `bot.ts` consulta `fetchLatestBaileysVersion()` y usa la vigente (`2.3000.1043857760`). Si aun así ves `405`, es bloqueo de red (VPN/proxy/sandbox).
 
 ### 🔄 Actualizar (si ya instalaste antes)
 
@@ -58,7 +59,7 @@ Hace `git pull` + `npm install` + `rm -rf session` + `npm start`. **Usalo siempr
 5. Si cambió `package.json`, corre `npm install` solo.
 6. Llama a `loadCommands()` + `syncConfig()`: los **85 comandos se recargan en caliente** y responde con el listado de archivos cambiados.
 
-Solo avisa de reiniciar cuando se tocó el motor (`lib/`, `index.ts`, `handler.ts`), porque esos módulos ya están cargados en memoria. El `config.ts` se recarga solo por su watcher. No borra `session/` ni reinicia el proceso.
+Solo avisa de reiniciar cuando se tocó el motor (`lib/`, `bot.ts`, `index.ts`, `handler.ts`), porque esos módulos ya están cargados en memoria. El `config.ts` se recarga solo por su watcher. No borra `session/` ni reinicia el proceso.
 
 ### 🔒 Una sola instancia (evita el bucle 428 / 515)
 
@@ -71,7 +72,7 @@ El bot ahora crea un lock (`.mitsuri-<hash>.lock`) al arrancar: si ya hay otro p
 ps aux | grep -E 'tsx|mitsuri' | grep -v grep
 
 # Termux: matar el viejo y arrancar limpio
-pkill -f "tsx index.ts"
+pkill -f "tsx bot.ts"
 cd ~/MITSURI-BOT && rm -rf session && npm start
 
 # Si usás PM2
@@ -199,9 +200,9 @@ cd && cd MITSURI-BOT && rm -rf session && npm start
 
 | Síntoma | Arreglo |
 |---|---|
-| `428 Precondition Required / Connection Closed` + `[ RECONNECT ]` en bucle, «conectado» una y otra vez | **Dos procesos con la misma `session/`**. Matá el viejo: `pkill -f "tsx index.ts"` (o `pm2 delete mitsuri`), y si sigue `rm -rf session && npm start`. El bot ahora **bloquea la 2ª instancia** con un lock y avisa el PID. Ver la sección «🔒 Una sola instancia». |
+| `428 Precondition Required / Connection Closed` + `[ RECONNECT ]` en bucle, «conectado» una y otra vez | **Dos procesos con la misma `session/`**. Matá el viejo: `pkill -f "tsx bot.ts"` (o `pm2 delete mitsuri`), y si sigue `rm -rf session && npm start`. El bot ahora **bloquea la 2ª instancia** con un lock y avisa el PID. Ver la sección «🔒 Una sola instancia». |
 | No aparece el código / «Sesión cerrada desde el teléfono» | Copia vieja: `cd ~/MITSURI-BOT && bash update.sh`. Elegí `2`, poné tu número y esperá 5–10 s. Sin VPN ni proxy. |
-| `ERR_MODULE_NOT_FOUND: Cannot find module '/home/container/config.js'` en HidenCloud / Pterodactyl, `Server marked as offline`, `Exit code: 1` | El egg arranca con `ts-node` y no traduce los imports `.js` → `.ts`. Poné **`MAIN_FILE=main.cjs`** (o Startup Command = `npm start`) y `AUTO_UPDATE=1`. Ver la sección «☁️ Panel HidenCloud / Pterodactyl». |
+| `ERR_MODULE_NOT_FOUND: Cannot find module '/home/container/config.js'` en HidenCloud / Pterodactyl, `Server marked as offline`, `Exit code: 1` | El egg usa `ts-node --esm` con Node 23 y no traduce los imports `.js` → `.ts`. Ya está resuelto en el repo: `index.ts` es una entrada mínima que lanza `bot.ts` con `tsx`. Poné **`AUTO_UPDATE=1`**, hacé `git pull` y reiniciá; no hace falta cambiar `MAIN_FILE`. Ver la sección «☁️ Panel HidenCloud / Pterodactyl». |
 | El código venció | Dura 2 minutos; el bot muestra uno nuevo solo. No hace que lo hagas a mano. `PAIRING_TTL_MS` en `.env` lo cambia. |
 | `405` al conectar | Versión vieja de WA Web o red bloqueada. Corré `bash update.sh`; el banner debe mostrar `🆕 WA Web : 2.3000.1043857760`. Si dice «se usa la del fork», probá otra WiFi/datos y desactivá VPN. |
 | `Could not load the "sharp" module using the android-arm64 runtime` | `npm install --force --no-save @img/sharp-wasm32` o `bash install-termux.sh`. El bot arranca igual; solo `.sticker` y `.toimg` avisan. |
@@ -228,40 +229,40 @@ Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/home/container/config.js'
 [HIDENCLOUD] Aborting automatic restart, last crash occurred less than 60 seconds ago.
 ```
 
-**No falta ningún archivo.** El egg de tu panel arranca así:
+**No falta ningún archivo.** El egg arranca con `ts-node --esm /home/container/index.ts` (o con `node` cuando `MAIN_FILE` termina en `.js`). Con Node 23 eso activa el *type stripping* nativo, que **no reescribe** los imports `./config.js` → `./config.ts` que exige ESM + NodeNext. Eso lo resolvía `tsx`, pero el panel nunca llegaba a usarlo: el import se buscaba literal y el proceso moría con `Exit code: 1` antes de cargar el bot. El `Aborting automatic restart` es sólo el panel frenando los reinicios del crash.
+
+**Ya está arreglado en el repo y no hay que tocar ninguna variable del panel.** `index.ts` ahora es una entrada mínima (sólo imports `node:`, sin ningún `./algo.js`), así que `ts-node`, `node`, PM2 o el panel la ejecutan sin problema; ella arranca el bot real, **`bot.ts`**, con `tsx` — el mismo comando que `npm start`. El `config.js` ya no se busca nunca desde `ts-node`.
+
+### Lo único que hay que hacer en el server
 
 ```bash
-/usr/local/bin/ts-node /home/container/${MAIN_FILE}
+AUTO_UPDATE=1
 ```
 
-El proyecto es ESM (`"type": "module"`) y sus imports son del tipo `./config.js` apuntando a `config.ts`. Eso lo resuelve **`tsx`**, que es el runner de `npm start`. Ni `ts-node` en modo CLI ni el soporte nativo de `.ts` de Node 23 (el `ExperimentalWarning: Type Stripping` del log) reescriben `.js` → `.ts`: el import se busca literal, no existe y el proceso muere con `Exit code: 1` antes de cargar el bot. El `Aborting automatic restart` es sólo el panel frenando los reinicios del crash.
+Guardá y dale **Restart**: el `git pull` del egg trae el cambio y él mismo corre `npm install`. Si subiste el repo como ZIP sin `.git`, actualizá los archivos a mano (o cloná con `git clone`). `MAIN_FILE` puede quedarse exactamente como esté:
 
-### Arreglo (elegí uno)
-
-| Opción | Dónde | Valor |
+| `MAIN_FILE` | Qué ejecuta el egg | Resultado |
 |---|---|---|
-| ✅ Recomendada | Variable de inicio **`MAIN_FILE`** | `main.cjs` |
-| Alternativa | Startup Command / comando de arranque | `npm start` |
-| Si el egg corre en modo ESM y rechaza `.cjs` | `MAIN_FILE` | `main.js` |
+| `index.ts` (el de la captura, Node 23) | `ts-node --esm index.ts` | ✅ funciona |
+| `main.cjs` | `ts-node --esm main.cjs` | ✅ funciona |
+| `main.js` | `node main.js` | ✅ funciona |
+| Startup Command = `npm start` | `tsx bot.ts` | ✅ funciona |
 
-`main.cjs` es JavaScript CommonJS puro, sin imports relativos a `.ts`: lo ejecuta cualquier lanzador (`node`, `ts-node`, PM2, el panel). Él arranca `tsx index.ts` —**exactamente lo mismo que `npm start`**— y le pasa la consola, el `stdin`, las señales y el código de salida. Por eso el código de vinculación, el lock de instancia única y la recarga de comandos funcionan igual que en Termux.
-
-Variables del panel:
+`main.cjs` y `main.js` quedan como entradas alternativas (JavaScript puro) por si el panel cambia de egg o querés usar PM2. Variables recomendadas:
 
 ```bash
-MAIN_FILE=main.cjs
+MAIN_FILE=index.ts
 AUTO_UPDATE=1
 NODE_PACKAGES=
 NODE_ARGS=
 ```
 
-- `AUTO_UPDATE=1` → el panel hace `git pull` en cada arranque y trae el fix solo.
 - Dejá `NODE_PACKAGES` y `NODE_ARGS` **vacíos**: el panel ya corre `npm install` si hay `package.json`.
 - `tsx` y `typescript` están en **`dependencies`** (no en `devDependencies`) para que se instalen aunque el panel use `NODE_ENV=production`.
-- Node ≥ 20. Si el panel deja elegir versión, usá **Node 20 LTS**: Node 23 activa el *type stripping* experimental y es el que genera el warning del log.
-- Si subiste el repo como ZIP sin `.git`, `AUTO_UPDATE` no hace nada: actualizá los archivos a mano o cloná con `git clone`.
+- Node ≥ 20. Probado con **Node 23.11.1**, justo el de la captura. Ojo: si dejás `MAIN_FILE=index.ts`, el egg usa `ts-node --esm` y necesita el *type stripping* nativo (**Node ≥ 22.6 / 23**); en Node 20 LTS poné `MAIN_FILE=main.js` (el egg usa `node` a secas) o Startup Command = `npm start`. El warning `ExperimentalWarning: Type Stripping` es inofensivo.
+- `bot.ts` es el bot (QR/código, lock de instancia, comandos); `index.ts` sólo lo lanza. Si el panel deja editar el comando de arranque, `npm start` es el camino más corto.
 
-Guardá, dale **Restart** y la consola tiene que mostrar:
+Después del Restart la consola tiene que mostrar:
 
 ```
 🌸 MITSURI-MD · arrancando con tsx (entrada compatible con el panel)
@@ -276,7 +277,7 @@ Vinculalo desde WhatsApp → **Dispositivos vinculados** → **Vincular con núm
 
 ## Vinculación
 
-Al arrancar, `index.ts` pregunta cómo quieres vincular:
+Al arrancar, `bot.ts` pregunta cómo quieres vincular:
 
 ```
 ╭⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ 》
@@ -325,7 +326,7 @@ npm start -- --qr
 npm start -- --code
 ```
 
-`PAIRING_CODE` fija un código propio de 8 caracteres, `PAIRING_TTL_MS` el tiempo de vida (`120000` = 2 min), `PAIRING_DELAY_MS` la espera antes de pedirlo (`3000`), `PAIRING_LEGACY_PREFIX=1` activa los prefijos viejos `521`/`549`. En servidores sin terminal interactiva (PM2, Docker, CI) no se pregunta: usa QR salvo que definas `AUTH_METHOD` y `PAIRING_NUMBER`. Las variables se leen de `.env` (`dotenv/config` en `index.ts`) o del entorno. También `npm start -- --qr`, `npm start -- --code` o `npm start -- code`.
+`PAIRING_CODE` fija un código propio de 8 caracteres, `PAIRING_TTL_MS` el tiempo de vida (`120000` = 2 min), `PAIRING_DELAY_MS` la espera antes de pedirlo (`3000`), `PAIRING_LEGACY_PREFIX=1` activa los prefijos viejos `521`/`549`. En servidores sin terminal interactiva (PM2, Docker, CI) no se pregunta: usa QR salvo que definas `AUTH_METHOD` y `PAIRING_NUMBER`. Las variables se leen de `.env` (`dotenv/config` en `bot.ts`) o del entorno. También `npm start -- --qr`, `npm start -- --code` o `npm start -- code`.
 
 > **¿Sigue sin salir el código o dice `405`?** Un solo comando actualiza todo y arranca con sesión limpia:
 > ```bash
@@ -466,6 +467,6 @@ Cada sub-bot es **un socket de Baileys más dentro del mismo proceso** (no un pr
 
 ## Verificado
 
-`npm run typecheck` · `npm run build` · arranque con 85 comandos y 9 APIs · lock de instancia única (2º proceso bloqueado) · backoff de reconexión verificado · 43 endpoints · 19 categorías · `.fix` probado contra un remoto git real (pull, respaldo, stash y recarga en caliente) · menú limpio verificado en `list`/`buttons`/`text` · botones/listas · hot-reload · menú de vinculación QR/código · `fetchLatestBaileysVersion()` → `2.3000.1043857760` · socket con `makeCacheableSignalKeyStore` + `Browsers.macOS('Safari')` · sesión limpia antes de vincular · código de 8 dígitos impreso con socket real (formato `XXXX-XXXX`) y probado con `lib/pairing.ts` · TTL de 2 minutos con regeneración · reconexión `515`/`401` · sub-bots con la misma versión y código verificado + `MAX_SUBBOTS` · medición de RSS por socket · `update.sh` · `install-termux.sh` · `sharp` probado con solo WASM · `main.cjs` probado con `node`, `ts-node`, `ts-node --esm`, `node --loader ts-node/esm`, `npm start` y `npm run start:panel` · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
+`npm run typecheck` · `npm run build` · arranque con 85 comandos y 9 APIs · lock de instancia única (2º proceso bloqueado) · backoff de reconexión verificado · 43 endpoints · 19 categorías · `.fix` probado contra un remoto git real (pull, respaldo, stash y recarga en caliente) · menú limpio verificado en `list`/`buttons`/`text` · botones/listas · hot-reload · menú de vinculación QR/código · `fetchLatestBaileysVersion()` → `2.3000.1043857760` · socket con `makeCacheableSignalKeyStore` + `Browsers.macOS('Safari')` · sesión limpia antes de vincular · código de 8 dígitos impreso con socket real (formato `XXXX-XXXX`) y probado con `lib/pairing.ts` · TTL de 2 minutos con regeneración · reconexión `515`/`401` · sub-bots con la misma versión y código verificado + `MAX_SUBBOTS` · medición de RSS por socket · `update.sh` · `install-termux.sh` · `sharp` probado con solo WASM · `index.ts` / `main.cjs` probados con `node`, `ts-node --esm` en **Node 23.11.1** (reproducción exacta del panel), `node --loader ts-node/esm`, `npm start` y `npm run start:panel` · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
 
 MIT 🌸

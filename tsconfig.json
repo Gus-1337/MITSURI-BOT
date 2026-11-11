@@ -3,7 +3,10 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2022", "DOM"],
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
     "strict": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
@@ -12,8 +15,20 @@
     "forceConsistentCasingInFileNames": true,
     "noEmit": true,
     "outDir": "dist",
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["index.ts", "handler.ts", "config.ts", "lib/**/*.ts", "commands/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "bot.ts",
+    "index.ts",
+    "handler.ts",
+    "config.ts",
+    "lib/**/*.ts",
+    "commands/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
 }
