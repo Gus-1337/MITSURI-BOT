@@ -27,6 +27,7 @@ import { handleMessage, handleGroupParticipants, invalidateGroupCache } from './
 import { adquirirLock, liberarLock } from './lib/instance.js';
 import { loadCommands, commandCount } from './lib/loader.js';
 import { pedirCodigoVinculacion } from './lib/pairing.js';
+import { avisosCodigo, desglosarCodigo, esSoloNumerosSeguros, formatearCodigo, generarCodigoSeguro, normalizarCodigo } from './lib/paircode.js';
 import { registrarCierre, calcularEspera, hayTormenta } from './lib/reconnect.js';
 import { applySettings } from './lib/settings.js';
 import { setMainSocket } from './lib/runtime.js';
@@ -42,6 +43,8 @@ const TTL_TEXTO = CODE_TTL_MS >= 60_000
   ? `${Math.round(CODE_TTL_MS / 60_000)} minuto${Math.round(CODE_TTL_MS / 60_000) === 1 ? '' : 's'}`
   : `${Math.round(CODE_TTL_MS / 1000)} segundos`;
 const PAIRING_DELAY_MS = Math.max(1_000, Number(process.env.PAIRING_DELAY_MS) || 3_000);
+const ESTILO_CODIGO = (process.env.PAIRING_CODE_STYLE || 'seguro').trim().toLowerCase();
+const CODIGO_LEGIBLE = !['aleatorio', 'crockford', 'original', 'off', '0'].includes(ESTILO_CODIGO);
 
 const httpAgent = new https.Agent({ keepAlive: true, maxSockets: 100, keepAliveMsecs: 15000, scheduling: 'fifo' });
 
@@ -58,6 +61,7 @@ let reiniciando = false;
 let pairSuccess = false;
 let activeSock: any = null;
 let numeroVinculacion = '';
+let onNuevoCodigo: (() => void) | null = null;
 const cierres: number[] = [];
 
 function normalizePhone(input: any): string {
@@ -103,8 +107,14 @@ function initConsola(): void {
   if (consola) return;
   consola = readline.createInterface({ input: process.stdin, output: process.stdout });
   consola.on('line', linea => {
-    if (pendiente) { const fn = pendiente; pendiente = null; fn(linea); }
-    else colaLineas.push(linea);
+    if (pendiente) { const fn = pendiente; pendiente = null; fn(linea); return; }
+    const comando = linea.trim().toLowerCase();
+    if (['nuevo', 'new', 'code', 'codigo', 'otro', 'reintentar'].includes(comando)) {
+      if (onNuevoCodigo) onNuevoCodigo();
+      else console.log(chalk.yellow('   ⏳ Todavía no hay un código para renovar.'));
+      return;
+    }
+    colaLineas.push(linea);
   });
   consola.on('close', () => {
     if (pendiente) { const fn = pendiente; pendiente = null; fn(''); }
@@ -181,9 +191,16 @@ async function elegirVinculacion(): Promise<void> {
 
   if (!usarCodigo) return;
 
-  if (bot.pairingCode && bot.pairingCode.length !== 8) {
-    console.log(chalk.yellow(`   PAIRING_CODE debe tener 8 caracteres (tiene ${bot.pairingCode.length}), se genera uno automático.`));
-    bot.pairingCode = '';
+  if (bot.pairingCode) {
+    const limpio = normalizarCodigo(bot.pairingCode);
+    if (limpio.length !== 8) {
+      console.log(chalk.yellow(`   PAIRING_CODE debe tener 8 caracteres (tiene ${limpio.length}), se genera uno automático.`));
+      bot.pairingCode = '';
+    } else {
+      bot.pairingCode = limpio;
+      const avisos = avisosCodigo(limpio);
+      if (avisos.length) console.log(chalk.yellow(`   ⚠️  Tu PAIRING_CODE tiene caracteres confusos: ${avisos.join(' · ')}`));
+    }
   }
 
   let numero = normalizePhone(process.env.PAIRING_NUMBER || '');
@@ -303,21 +320,35 @@ async function start(nuevaSesion = false): Promise<void> {
     if (bot.auth !== 'code' || codeRequested || codeInFlight || connected || state.creds.registered || reiniciando) return;
     codeInFlight = true;
     const numero = numeroVinculacion || normalizePhone(bot.owner.number);
+    const elegido = bot.pairingCode || (CODIGO_LEGIBLE ? generarCodigoSeguro() : undefined);
     console.log(chalk.cyan('   ⏳ Pidiendo el código de 8 dígitos a WhatsApp…'));
     void pedirCodigoVinculacion({
       sock,
       numero,
-      customCode: bot.pairingCode || undefined,
+      customCode: elegido,
       intentos: 12,
       esperaMs: 1000,
+      onAviso: (aviso: string) => console.log(chalk.yellow(`   ${aviso}`)),
       onCode: (code: string) => {
         codeRequested = true;
-        const bonito = code.match(/.{1,4}/g)?.join('-') || code;
+        const limpio = normalizarCodigo(code);
+        const bonito = formatearCodigo(limpio);
         const vence = new Date(Date.now() + CODE_TTL_MS);
         const hora = vence.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit', timeZone: bot.timezone });
+        console.log('');
         console.log(chalk.white.bgBlue(' CODIGO DE VINCULACION ') + chalk.bold.white(` : ${bonito}`));
+        console.log(chalk.bold.white(`   ✍️  Escribí así : ${desglosarCodigo(limpio)}`));
+        console.log(`   📋 Sin guion   : ${limpio}`);
+        const avisos = avisosCodigo(limpio);
+        if (esSoloNumerosSeguros(limpio)) {
+          console.log(chalk.green('   ✅ Sólo números del 2 al 9: sin W/V, 1/I, 0/O ni letras que confundir'));
+        } else if (avisos.length) {
+          console.log(chalk.yellow('   ⚠️  Ojo, estos caracteres se confunden en la consola:'));
+          for (const aviso of avisos) console.log(chalk.yellow(`        · ${aviso}`));
+        }
         console.log(`   📞 Número : +${numero}`);
-        console.log(`   ⏱️  Vence en ${TTL_TEXTO} (${hora}) · se genera uno nuevo solo al vencer`);
+        console.log(`   ⏱️  Vence en ${TTL_TEXTO} (${hora}) · se genera uno nuevo al vencer o escribiendo  nuevo`);
+        console.log(chalk.cyan('   ♻️  ¿Te equivocaste? Escribe  nuevo  en esta consola para pedir otro código'));
         console.log(`   WhatsApp → Ajustes → Dispositivos vinculados → Vincular con número de teléfono\n`);
         programarVencimiento();
       },
@@ -327,6 +358,12 @@ async function start(nuevaSesion = false): Promise<void> {
       },
     }).finally(() => { codeInFlight = false; });
   }
+
+  onNuevoCodigo = () => {
+    if (connected) { console.log(chalk.green('   ✅ Ya estás conectado, no hace falta otro código.')); return; }
+    if (bot.auth !== 'code') { console.log(chalk.yellow('   ⚠️  Esto sólo aplica cuando vinculás con código (no con QR).')); return; }
+    reiniciarVinculacion('♻️  Pidiendo un código NUEVO (el anterior ya no se usa)…', 1200);
+  };
 
   if (!esQR && !state.creds.registered) {
     setTimeout(solicitarCodigo, PAIRING_DELAY_MS).unref?.();
@@ -440,6 +477,9 @@ async function main(): Promise<void> {
   }
 
   await elegirVinculacion();
+  if (bot.auth === 'code') {
+    try { initConsola(); } catch { /* en algunos paneles stdin no es interactivo */ }
+  }
   const loaded = await loadCommands();
   banner();
   if (!loaded) console.warn('⚠️ No se cargó ningún comando. Revisa la carpeta commands/.');

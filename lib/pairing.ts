@@ -6,6 +6,9 @@
  * "Connection Closed". El momento seguro es cuando el servidor manda
  * `pair-device` (nosotros lo vemos como el evento `qr`), que llega después del
  * handshake. Aun así se reintenta por si el socket se cerró en el medio.
+ *
+ * Si se pasa `customCode` y el servidor lo rechaza, se reintenta sin él para
+ * que WhatsApp genere el suyo (así un código propio nunca bloquea la vinculación).
  */
 import { sleep } from './utils.js';
 
@@ -15,12 +18,13 @@ export interface PairingOptions {
   customCode?: string;
   onCode: (code: string) => void;
   onError: (mensaje: string) => void;
+  onAviso?: (mensaje: string) => void;
   intentos?: number;
   esperaMs?: number;
 }
 
 export async function pedirCodigoVinculacion({
-  sock, numero, customCode, onCode, onError, intentos = 8, esperaMs = 1000,
+  sock, numero, customCode, onCode, onError, onAviso, intentos = 8, esperaMs = 1000,
 }: PairingOptions): Promise<boolean> {
   const limpio = String(numero || '').replace(/[^0-9]/g, '');
   if (!limpio) {
@@ -28,16 +32,21 @@ export async function pedirCodigoVinculacion({
     return false;
   }
   let ultimo = 'el WebSocket nunca se abrió';
+  let elegido: string | undefined = customCode;
   for (let i = 0; i < intentos; i++) {
     if (sock?.ws?.isOpen) {
       try {
-        const code = customCode
-          ? await sock.requestPairingCode(limpio, customCode)
+        const code = elegido
+          ? await sock.requestPairingCode(limpio, elegido)
           : await sock.requestPairingCode(limpio);
         onCode(code);
         return true;
       } catch (error: any) {
         ultimo = String(error?.message ?? error);
+        if (elegido) {
+          elegido = undefined;
+          onAviso?.('⚠️  WhatsApp rechazó el código elegido; se usa uno generado por WhatsApp.');
+        }
       }
     }
     await sleep(esperaMs);

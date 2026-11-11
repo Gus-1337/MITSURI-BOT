@@ -203,6 +203,7 @@ cd && cd MITSURI-BOT && rm -rf session && npm start
 | `428 Precondition Required / Connection Closed` + `[ RECONNECT ]` en bucle, «conectado» una y otra vez | **Dos procesos con la misma `session/`**. Matá el viejo: `pkill -f "tsx bot.ts"` (o `pm2 delete mitsuri`), y si sigue `rm -rf session && npm start`. El bot ahora **bloquea la 2ª instancia** con un lock y avisa el PID. Ver la sección «🔒 Una sola instancia». |
 | No aparece el código / «Sesión cerrada desde el teléfono» | Copia vieja: `cd ~/MITSURI-BOT && bash update.sh`. Elegí `2`, poné tu número y esperá 5–10 s. Sin VPN ni proxy. |
 | `ERR_MODULE_NOT_FOUND: Cannot find module '/home/container/config.js'` en HidenCloud / Pterodactyl, `Server marked as offline`, `Exit code: 1` | El egg usa `ts-node --esm` con Node 23 y no traduce los imports `.js` → `.ts`. Ya está resuelto en el repo: `index.ts` es una entrada mínima que lanza `bot.ts` con `tsx`. Poné **`AUTO_UPDATE=1`**, hacé `git pull` y reiniciá; no hace falta cambiar `MAIN_FILE`. Ver la sección «☁️ Panel HidenCloud / Pterodactyl». |
+| WhatsApp dice «No se pudo vincular el dispositivo» / «código incorrecto» | Casi siempre es **un carácter mal copiado**: la `W` parecía dos `V`, o `1`/`I`, `0`/`O`. Ya no pasa: los códigos son **sólo números del 2 al 9** y se imprimen separados. Escribí `nuevo` en la consola para pedir otro. Ver «🔢 Código legible». |
 | El código venció | Dura 2 minutos; el bot muestra uno nuevo solo. No hace que lo hagas a mano. `PAIRING_TTL_MS` en `.env` lo cambia. |
 | `405` al conectar | Versión vieja de WA Web o red bloqueada. Corré `bash update.sh`; el banner debe mostrar `🆕 WA Web : 2.3000.1043857760`. Si dice «se usa la del fork», probá otra WiFi/datos y desactivá VPN. |
 | `Could not load the "sharp" module using the android-arm64 runtime` | `npm install --force --no-save @img/sharp-wasm32` o `bash install-termux.sh`. El bot arranca igual; solo `.sticker` y `.toimg` avisan. |
@@ -299,13 +300,37 @@ Ejemplo: +52 1 33 1916 4806  /  +51 926 519 334
 y a los 3 segundos imprime:
 
 ```
- CODIGO DE VINCULACION  : A1B2-C3D4
-   📞 Número : +523319164806
-   ⏱️  Vence en 2 minutos (11:52) · se genera uno nuevo solo al vencer
+ CODIGO DE VINCULACION  : 7493-6258
+   ✍️  Escribí así : 7 4 9 3 6 2 5 8
+   📋 Sin guion   : 74936258
+   ✅ Sólo números del 2 al 9: sin W/V, 1/I, 0/O ni letras que confundir
+   📞 Número : +51926519334
+   ⏱️  Vence en 2 minutos (11:52) · se genera uno nuevo al vencer o escribiendo  nuevo
+   ♻️  ¿Te equivocaste? Escribe  nuevo  en esta consola para pedir otro código
    WhatsApp → Ajustes → Dispositivos vinculados → Vincular con número de teléfono
 ```
 
 En el celular: **WhatsApp → Ajustes → Dispositivos vinculados → Vincular con número de teléfono** → escribí ese código. El número elegido se agrega a los dueños de la sesión.
+
+### 🔢 Código legible (se acabó el «código incorrecto»)
+
+El fork genera el código con el alfabeto Crockford `123456789ABCDEFGHJKLMNPQRSTVWXYZ`, que en la consola de un celular tiene trampas: **la `W` parece dos `V`**, y `V`/`U`, `1`/`I`/`L`, `0`/`O`, `5`/`S`, `8`/`B`, `2`/`Z` se confunden. Con un solo carácter mal copiado WhatsApp responde *«No se pudo vincular el dispositivo… obtén un código nuevo»*. (Caso real: el bot mostró `8V19-WVL4` y se escribió `8V19-VVL4`.)
+
+Ahora MITSURI-MD **elige su propio código: 8 dígitos del 2 al 9**, sin letras, sin `0` ni `1`. Es perfectamente válido: el código sólo se usa como material PBKDF2 local (`derivePairingCodeKey`), y el celular deriva la misma clave con lo que escribas. En pantalla se imprime además:
+
+- `✍️ Escribí así` → los 8 caracteres separados por espacios.
+- `📋 Sin guion` → para copiar/pegar directo.
+- Una **leyenda de advertencia** con el nombre de cada carácter confuso, pero sólo si el código los tiene (cuando usás `PAIRING_CODE` propio o `PAIRING_CODE_STYLE=aleatorio`).
+
+Si te equivocaste, el código venció o WhatsApp te pide uno nuevo: escribí **`nuevo`** (también `code`, `otro`) en la consola del panel o de Termux. El bot limpia la sesión y pide otro código en ~1 segundo **sin reiniciar el proceso**.
+
+```bash
+PAIRING_CODE=24682468          # código fijo tuyo, 8 caracteres (se normaliza a mayúsculas y sin guiones)
+PAIRING_CODE_STYLE=aleatorio   # volver al código aleatorio original de WhatsApp
+```
+
+`PAIRING_CODE` se normaliza solo; si tiene caracteres confusos el bot te avisa cuáles. Si WhatsApp llegara a rechazar un código propio, `lib/pairing.ts` reintenta automáticamente con uno generado por WhatsApp, así que nunca te quedás sin código.
+
 
 **Conexión reescrita siguiendo un flujo que sí entrega el código:**
 
@@ -315,7 +340,7 @@ En el celular: **WhatsApp → Ajustes → Dispositivos vinculados → Vincular c
 - El código se pide **3 segundos después de crear el socket** (no en `connection: 'connecting'`, que este fork emite demasiado pronto y daba *Connection Closed*), con reintentos desde `lib/pairing.ts` hasta que el WebSocket esté abierto.
 - Reconexión: `515` / *Stream Errored* reinicia el socket, `401` limpia sesión y pide código nuevo, cualquier otro cierre reintenta a los 3 s.
 
-**El código dura 2 minutos** y solo se regenera al vencer (`PAIRING_TTL_MS`). `normalizePhone` limpia el número, quita ceros, convierte los 10 dígitos colombianos a `57` y, si ponés `PAIRING_LEGACY_PREFIX=1`, aplica los prefijos viejos `521`/`549` de México/Argentina.
+**El código dura 2 minutos** y se regenera al vencer (`PAIRING_TTL_MS`) o cuando escribís `nuevo` en la consola. `normalizePhone` limpia el número, quita ceros, convierte los 10 dígitos colombianos a `57` y, si ponés `PAIRING_LEGACY_PREFIX=1`, aplica los prefijos viejos `521`/`549` de México/Argentina.
 
 Para saltar la pregunta:
 
@@ -326,7 +351,7 @@ npm start -- --qr
 npm start -- --code
 ```
 
-`PAIRING_CODE` fija un código propio de 8 caracteres, `PAIRING_TTL_MS` el tiempo de vida (`120000` = 2 min), `PAIRING_DELAY_MS` la espera antes de pedirlo (`3000`), `PAIRING_LEGACY_PREFIX=1` activa los prefijos viejos `521`/`549`. En servidores sin terminal interactiva (PM2, Docker, CI) no se pregunta: usa QR salvo que definas `AUTH_METHOD` y `PAIRING_NUMBER`. Las variables se leen de `.env` (`dotenv/config` en `bot.ts`) o del entorno. También `npm start -- --qr`, `npm start -- --code` o `npm start -- code`.
+`PAIRING_CODE` fija un código propio de 8 caracteres, `PAIRING_CODE_STYLE=aleatorio` vuelve al código original de WhatsApp (por defecto se genera uno **sólo con números del 2 al 9**), `PAIRING_TTL_MS` el tiempo de vida (`120000` = 2 min), `PAIRING_DELAY_MS` la espera antes de pedirlo (`3000`), `PAIRING_LEGACY_PREFIX=1` activa los prefijos viejos `521`/`549`. En servidores sin terminal interactiva (PM2, Docker, CI) no se pregunta: usa QR salvo que definas `AUTH_METHOD` y `PAIRING_NUMBER`. Las variables se leen de `.env` (`dotenv/config` en `bot.ts`) o del entorno. También `npm start -- --qr`, `npm start -- --code` o `npm start -- code`.
 
 > **¿Sigue sin salir el código o dice `405`?** Un solo comando actualiza todo y arranca con sesión limpia:
 > ```bash
@@ -467,6 +492,6 @@ Cada sub-bot es **un socket de Baileys más dentro del mismo proceso** (no un pr
 
 ## Verificado
 
-`npm run typecheck` · `npm run build` · arranque con 85 comandos y 9 APIs · lock de instancia única (2º proceso bloqueado) · backoff de reconexión verificado · 43 endpoints · 19 categorías · `.fix` probado contra un remoto git real (pull, respaldo, stash y recarga en caliente) · menú limpio verificado en `list`/`buttons`/`text` · botones/listas · hot-reload · menú de vinculación QR/código · `fetchLatestBaileysVersion()` → `2.3000.1043857760` · socket con `makeCacheableSignalKeyStore` + `Browsers.macOS('Safari')` · sesión limpia antes de vincular · código de 8 dígitos impreso con socket real (formato `XXXX-XXXX`) y probado con `lib/pairing.ts` · TTL de 2 minutos con regeneración · reconexión `515`/`401` · sub-bots con la misma versión y código verificado + `MAX_SUBBOTS` · medición de RSS por socket · `update.sh` · `install-termux.sh` · `sharp` probado con solo WASM · `index.ts` / `main.cjs` probados con `node`, `ts-node --esm` en **Node 23.11.1** (reproducción exacta del panel), `node --loader ts-node/esm`, `npm start` y `npm run start:panel` · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
+`npm run typecheck` · `npm run build` · arranque con 85 comandos y 9 APIs · lock de instancia única (2º proceso bloqueado) · backoff de reconexión verificado · 43 endpoints · 19 categorías · `.fix` probado contra un remoto git real (pull, respaldo, stash y recarga en caliente) · menú limpio verificado en `list`/`buttons`/`text` · botones/listas · hot-reload · menú de vinculación QR/código · código legible (8 dígitos 2–9) + comando `nuevo` en consola · `fetchLatestBaileysVersion()` → `2.3000.1043857760` · socket con `makeCacheableSignalKeyStore` + `Browsers.macOS('Safari')` · sesión limpia antes de vincular · código de 8 dígitos impreso con socket real (formato `XXXX-XXXX`) y probado con `lib/pairing.ts` · TTL de 2 minutos con regeneración · reconexión `515`/`401` · sub-bots con la misma versión y código verificado + `MAX_SUBBOTS` · medición de RSS por socket · `update.sh` · `install-termux.sh` · `sharp` probado con solo WASM · `index.ts` / `main.cjs` probados con `node`, `ts-node --esm` en **Node 23.11.1** (reproducción exacta del panel), `node --loader ts-node/esm`, `npm start` y `npm run start:panel` · llamadas reales a Stellar, Delirius, SiputzX y PopCat.
 
 MIT 🌸
